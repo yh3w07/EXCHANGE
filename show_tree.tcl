@@ -12,12 +12,14 @@ namespace eval ::show_tree {
     variable rpt_file "show_tree.rpt"
     variable default_depth_limit 0
     variable max_visit_count 100000
+    variable flush_interval 1000
     variable clock_pin_names {CK CP CLK ECK}
     variable macro_ref_patterns {*SRAM* *RAM* *ROM* *RF* *MEM* *MACRO*}
     variable short_to_full
     variable full_to_short
     variable visited
     variable visit_count
+    variable line_count
     variable stopped_by_max_visit
 }
 
@@ -177,6 +179,28 @@ proc ::show_tree::pin_is_sequential_clock {pin_obj} {
     return [expr {[cell_is_sequential $cell_obj] && [pin_is_clock_name $pin_obj]}]
 }
 
+proc ::show_tree::pin_is_terminal {pin_name} {
+    set pin_obj [get_pin $pin_name]
+    if {$pin_obj eq ""} {
+        return 1
+    }
+
+    if {[pin_is_sequential_clock $pin_obj]} {
+        return 1
+    }
+
+    set cell_obj [get_pin_cell $pin_obj]
+    if {$cell_obj ne "" && [cell_is_macro $cell_obj]} {
+        return 1
+    }
+
+    if {![is_output_direction $pin_obj]} {
+        return 1
+    }
+
+    return 0
+}
+
 proc ::show_tree::get_output_pin_names_of_cell {cell_obj} {
     set names {}
     if {[catch {get_pins -quiet -of_objects $cell_obj} pins]} {
@@ -330,11 +354,17 @@ proc ::show_tree::spaces {count} {
 }
 
 proc ::show_tree::write_line {fh line} {
+    variable flush_interval
+    variable line_count
+
     puts $fh $line
-    flush $fh
+    incr line_count
+    if {$flush_interval > 0 && ($line_count % $flush_interval) == 0} {
+        flush $fh
+    }
 }
 
-proc ::show_tree::write_subtree {fh pin_name depth path depth_limit prefix} {
+proc ::show_tree::write_subtree {fh pin_name depth path depth_limit first_prefix rest_prefix} {
     variable visited
     variable visit_count
     variable max_visit_count
@@ -343,18 +373,18 @@ proc ::show_tree::write_subtree {fh pin_name depth path depth_limit prefix} {
     set label "[short_pin_name $pin_name] ($depth)"
 
     if {[lsearch -exact $path $pin_name] >= 0} {
-        write_line $fh "${prefix}${label} \[CYCLE\]"
+        write_line $fh "${first_prefix}${label} \[CYCLE\]"
         return
     }
 
     if {[info exists visited($pin_name)]} {
-        write_line $fh "${prefix}${label} \[VISITED\]"
+        write_line $fh "${first_prefix}${label} \[VISITED\]"
         return
     }
 
     if {$max_visit_count > 0 && $visit_count >= $max_visit_count} {
         set stopped_by_max_visit 1
-        write_line $fh "${prefix}${label} \[MAX_VISIT\]"
+        write_line $fh "${first_prefix}${label} \[MAX_VISIT\]"
         return
     }
 
@@ -362,28 +392,34 @@ proc ::show_tree::write_subtree {fh pin_name depth path depth_limit prefix} {
     incr visit_count
 
     if {$depth_limit > 0 && $depth >= $depth_limit} {
-        write_line $fh "${prefix}${label} \[MAX_DEPTH\]"
+        write_line $fh "${first_prefix}${label} \[MAX_DEPTH\]"
+        return
+    }
+
+    if {[pin_is_terminal $pin_name]} {
+        write_line $fh "${first_prefix}${label}"
         return
     }
 
     set child_names [get_child_pin_names $pin_name]
     if {[llength $child_names] == 0} {
-        write_line $fh "${prefix}${label}"
+        write_line $fh "${first_prefix}${label}"
         return
     }
 
     set child_path [concat $path [list $pin_name]]
     set is_first_child 1
+    set child_rest_prefix "${rest_prefix}[spaces [expr {[string length $label] + 5}]]"
 
     foreach child_name $child_names {
         if {$is_first_child} {
-            set this_prefix "${prefix}${label} --- "
+            set child_first_prefix "${first_prefix}${label} --- "
             set is_first_child 0
         } else {
-            set this_prefix "${prefix}[spaces [string length $label]] --- "
+            set child_first_prefix "${rest_prefix}[spaces [string length $label]] --- "
         }
 
-        write_subtree $fh $child_name [expr {$depth + 1}] $child_path $depth_limit $this_prefix
+        write_subtree $fh $child_name [expr {$depth + 1}] $child_path $depth_limit $child_first_prefix $child_rest_prefix
     }
 }
 
@@ -410,6 +446,7 @@ proc show_tree {user_pin args} {
     array unset ::show_tree::visited
     array set ::show_tree::visited {}
     set ::show_tree::visit_count 0
+    set ::show_tree::line_count 0
     set ::show_tree::stopped_by_max_visit 0
 
     set depth_limit $::show_tree::default_depth_limit
@@ -485,7 +522,7 @@ proc show_tree {user_pin args} {
     flush $fh
 
     foreach root_pin_name $root_pin_names {
-        ::show_tree::write_subtree $fh $root_pin_name 0 {} $depth_limit ""
+        ::show_tree::write_subtree $fh $root_pin_name 0 {} $depth_limit "" ""
         puts $fh ""
         flush $fh
     }
@@ -493,6 +530,7 @@ proc show_tree {user_pin args} {
     ::show_tree::write_mapping $fh
     puts $fh ""
     puts $fh "# visited_nodes: $::show_tree::visit_count"
+    puts $fh "# report_lines: $::show_tree::line_count"
     if {$::show_tree::stopped_by_max_visit} {
         puts $fh "# WARNING: traversal stopped by max_nodes limit."
     }
