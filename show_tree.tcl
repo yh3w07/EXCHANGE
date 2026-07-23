@@ -11,10 +11,14 @@
 namespace eval ::show_tree {
     variable rpt_file "show_tree.rpt"
     variable default_depth_limit 0
+    variable max_visit_count 100000
     variable clock_pin_names {CK CP CLK ECK}
     variable macro_ref_patterns {*SRAM* *RAM* *ROM* *RF* *MEM* *MACRO*}
     variable short_to_full
     variable full_to_short
+    variable visited
+    variable visit_count
+    variable stopped_by_max_visit
 }
 
 proc ::show_tree::safe_attr {obj attr {default ""}} {
@@ -325,43 +329,62 @@ proc ::show_tree::spaces {count} {
     return [string repeat " " $count]
 }
 
-proc ::show_tree::format_subtree {pin_name depth path depth_limit} {
+proc ::show_tree::write_line {fh line} {
+    puts $fh $line
+    flush $fh
+}
+
+proc ::show_tree::write_subtree {fh pin_name depth path depth_limit prefix} {
+    variable visited
+    variable visit_count
+    variable max_visit_count
+    variable stopped_by_max_visit
+
     set label "[short_pin_name $pin_name] ($depth)"
+
     if {[lsearch -exact $path $pin_name] >= 0} {
-        return [list "$label \[CYCLE\]"]
+        write_line $fh "${prefix}${label} \[CYCLE\]"
+        return
     }
+
+    if {[info exists visited($pin_name)]} {
+        write_line $fh "${prefix}${label} \[VISITED\]"
+        return
+    }
+
+    if {$max_visit_count > 0 && $visit_count >= $max_visit_count} {
+        set stopped_by_max_visit 1
+        write_line $fh "${prefix}${label} \[MAX_VISIT\]"
+        return
+    }
+
+    set visited($pin_name) 1
+    incr visit_count
+
     if {$depth_limit > 0 && $depth >= $depth_limit} {
-        return [list "$label \[MAX_DEPTH\]"]
+        write_line $fh "${prefix}${label} \[MAX_DEPTH\]"
+        return
     }
 
     set child_names [get_child_pin_names $pin_name]
     if {[llength $child_names] == 0} {
-        return [list $label]
+        write_line $fh "${prefix}${label}"
+        return
     }
 
-    set lines {}
-    set is_first_child 1
     set child_path [concat $path [list $pin_name]]
+    set is_first_child 1
 
     foreach child_name $child_names {
-        set child_lines [format_subtree $child_name [expr {$depth + 1}] $child_path $depth_limit]
-        set child_first_line [lindex $child_lines 0]
-        set child_rest_lines [lrange $child_lines 1 end]
-
         if {$is_first_child} {
-            lappend lines "$label --- $child_first_line"
+            set this_prefix "${prefix}${label} --- "
             set is_first_child 0
         } else {
-            lappend lines "[spaces [string length $label]] --- $child_first_line"
+            set this_prefix "${prefix}[spaces [string length $label]] --- "
         }
 
-        set continue_prefix [spaces [expr {[string length $label] + 5}]]
-        foreach child_line $child_rest_lines {
-            lappend lines "$continue_prefix$child_line"
-        }
+        write_subtree $fh $child_name [expr {$depth + 1}] $child_path $depth_limit $this_prefix
     }
-
-    return $lines
 }
 
 proc ::show_tree::write_mapping {fh} {
@@ -384,8 +407,13 @@ proc show_tree {user_pin args} {
     array set ::show_tree::short_to_full {}
     array unset ::show_tree::full_to_short
     array set ::show_tree::full_to_short {}
+    array unset ::show_tree::visited
+    array set ::show_tree::visited {}
+    set ::show_tree::visit_count 0
+    set ::show_tree::stopped_by_max_visit 0
 
     set depth_limit $::show_tree::default_depth_limit
+    set max_visit_count $::show_tree::max_visit_count
     set argc [llength $args]
     for {set i 0} {$i < $argc} {incr i} {
         set opt [lindex $args $i]
@@ -400,11 +428,22 @@ proc show_tree {user_pin args} {
                     error "show_tree: -l must be a non-negative integer. 0 means no limit."
                 }
             }
+            -max_nodes {
+                incr i
+                if {$i >= $argc} {
+                    error "show_tree: missing value for -max_nodes."
+                }
+                set max_visit_count [lindex $args $i]
+                if {![string is integer -strict $max_visit_count] || $max_visit_count < 0} {
+                    error "show_tree: -max_nodes must be a non-negative integer. 0 means no limit."
+                }
+            }
             default {
-                error "show_tree: unknown option '$opt'. Usage: show_tree <pin> ?-l depth?"
+                error "show_tree: unknown option '$opt'. Usage: show_tree <pin> ?-l depth? ?-max_nodes count?"
             }
         }
     }
+    set ::show_tree::max_visit_count $max_visit_count
 
     if {[catch {get_cells -quiet $user_pin} user_cells]} {
         set user_cells ""
@@ -441,16 +480,22 @@ proc show_tree {user_pin args} {
     puts $fh "# root_cell: [get_object_name $user_cell]"
     puts $fh "# root_output_pins: [llength $root_pin_names]"
     puts $fh "# depth_limit: $depth_limit"
+    puts $fh "# max_nodes: $max_visit_count"
     puts $fh ""
+    flush $fh
 
     foreach root_pin_name $root_pin_names {
-        foreach line [::show_tree::format_subtree $root_pin_name 0 {} $depth_limit] {
-            puts $fh $line
-        }
+        ::show_tree::write_subtree $fh $root_pin_name 0 {} $depth_limit ""
         puts $fh ""
+        flush $fh
     }
 
     ::show_tree::write_mapping $fh
+    puts $fh ""
+    puts $fh "# visited_nodes: $::show_tree::visit_count"
+    if {$::show_tree::stopped_by_max_visit} {
+        puts $fh "# WARNING: traversal stopped by max_nodes limit."
+    }
     close $fh
 
     puts "show_tree: wrote $::show_tree::rpt_file"
