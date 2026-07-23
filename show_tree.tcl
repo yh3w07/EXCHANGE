@@ -204,24 +204,27 @@ proc ::show_tree::get_connected_leaf_pin_names {pin_obj} {
         return $connected_names
     }
 
-    if {[catch {all_connected -leaf $nets} connected]} {
-        return $connected_names
-    }
-    foreach_in_collection connected_obj $connected {
-        set connected_name [object_name $connected_obj]
-        if {$connected_name eq $pin_name} {
+    foreach_in_collection net_obj $nets {
+        if {[catch {all_connected -leaf $net_obj} connected]} {
             continue
         }
 
-        set connected_pin [get_pin $connected_name]
-        if {$connected_pin eq ""} {
-            continue
-        }
-        if {![is_input_direction $connected_pin]} {
-            continue
-        }
+        foreach_in_collection connected_obj $connected {
+            set connected_name [object_name $connected_obj]
+            if {$connected_name eq $pin_name} {
+                continue
+            }
 
-        lappend connected_names $connected_name
+            set connected_pin [get_pin $connected_name]
+            if {$connected_pin eq ""} {
+                continue
+            }
+            if {![is_input_direction $connected_pin]} {
+                continue
+            }
+
+            lappend connected_names $connected_name
+        }
     }
 
     return [lsort -dictionary -unique $connected_names]
