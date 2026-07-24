@@ -11,7 +11,7 @@
 #   show_tree.rpt
 
 namespace eval ::show_tree {
-    variable script_version "2026-07-24.3"
+    variable script_version "2026-07-24.4"
     variable rpt_file "show_tree.rpt"
     variable default_depth_limit 0
     variable max_visit_count 100000
@@ -543,7 +543,8 @@ proc ::show_tree::write_subtree {fh node_id first_prefix rest_prefix} {
 
     set depth $node_depth($node_id)
     set column_width $level_width($depth)
-    set padded_label "${label}[spaces [expr {$column_width - [string length $label]}]]"
+    set first_link_dash_count [expr {$column_width - [string length $label] + 3}]
+    set first_link "${label} [string repeat "-" $first_link_dash_count] "
     set child_ids $node_children($node_id)
     set child_count [llength $child_ids]
 
@@ -552,11 +553,13 @@ proc ::show_tree::write_subtree {fh node_id first_prefix rest_prefix} {
         set has_later_sibling [expr {$child_index < ($child_count - 1)}]
 
         if {$child_index == 0} {
-            set child_first_prefix "${first_prefix}${padded_label} --- "
+            set child_first_prefix "${first_prefix}${first_link}"
         } else {
-            set child_first_prefix "${rest_prefix}|[spaces [expr {$column_width - 1}]] --- "
+            set child_first_prefix "${rest_prefix}|[string repeat "-" [expr {$column_width + 3}]] "
         }
 
+        # Continuation rows keep only the vertical marker; horizontal dashes
+        # would incorrectly connect a later sibling to the current child.
         if {$has_later_sibling} {
             set child_rest_prefix "${rest_prefix}|[spaces [expr {$column_width + 4}]]"
         } else {
