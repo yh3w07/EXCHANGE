@@ -4,14 +4,15 @@
 #   source show_tree.tcl
 #   show_tree a/b/c/buf/A
 #   show_tree a/b/c/buf/A -l 3
-#   show_tree a/b/c/buf/A -node
-#   show_tree -node a/b/c/buf/A -l 3
+#   show_tree a/b/c/buf/A -mode short
+#   show_tree -mode node a/b/c/buf/A -l 3
+#   show_tree -help
 #
 # Output:
 #   show_tree.rpt
 
 namespace eval ::show_tree {
-    variable script_version "2026-07-24.5-vertical"
+    variable script_version "2026-07-24.6-vertical"
     variable rpt_file "show_tree.rpt"
     variable default_depth_limit 0
     variable max_visit_count 100000
@@ -456,10 +457,9 @@ proc ::show_tree::build_subtree {pin_name depth path depth_limit} {
     return $node_id
 }
 
-proc ::show_tree::assign_node_labels {node_id node_mode} {
+proc ::show_tree::assign_node_labels {node_id display_mode} {
     variable node_pin
     variable node_depth
-    variable node_status
     variable node_children
     variable node_label
     variable node_display_serial
@@ -467,22 +467,27 @@ proc ::show_tree::assign_node_labels {node_id node_mode} {
 
     set pin_name $node_pin($node_id)
     set depth $node_depth($node_id)
-    if {$node_status($node_id) eq "INTERNAL"} {
-        if {$node_mode} {
-            set label "o${node_display_serial}_${depth}"
-            incr node_display_serial
-            set mapping_entries($label) $pin_name
-        } else {
+    switch -- $display_mode {
+        exact {
+            set label "$pin_name ($depth)"
+        }
+        short {
             set label "[short_pin_name $pin_name $depth] ($depth)"
         }
-    } else {
-        set label "$pin_name ($depth)"
+        node {
+            set label "node${node_display_serial} ($depth)"
+            incr node_display_serial
+            set mapping_entries($label) $pin_name
+        }
+        default {
+            error "show_tree: internal error: unsupported mode '$display_mode'."
+        }
     }
 
     set node_label($node_id) $label
 
     foreach child_id $node_children($node_id) {
-        assign_node_labels $child_id $node_mode
+        assign_node_labels $child_id $display_mode
     }
 }
 
@@ -547,8 +552,12 @@ proc ::show_tree::write_subtree {fh node_id prefix is_root is_last} {
     }
 }
 
-proc ::show_tree::write_mapping {fh node_mode} {
+proc ::show_tree::write_mapping {fh display_mode} {
     variable mapping_entries
+
+    if {$display_mode eq "exact"} {
+        return
+    }
 
     set keys [array names mapping_entries]
     if {[llength $keys] == 0} {
@@ -556,14 +565,49 @@ proc ::show_tree::write_mapping {fh node_mode} {
     }
 
     puts $fh ""
-    if {$node_mode} {
-        puts $fh "# node_name => full_name"
-    } else {
+    if {$display_mode eq "short"} {
         puts $fh "# short_name (level) => full_name"
+    } else {
+        puts $fh "# node_name (level) => full_name"
     }
     foreach mapping_key [lsort -dictionary $keys] {
         puts $fh "$mapping_key => $mapping_entries($mapping_key)"
     }
+}
+
+proc ::show_tree::help_text {} {
+    return [join [list \
+        "show_tree - Trace downstream pin connectivity as a vertical tree." \
+        "" \
+        "Usage:" \
+        "  show_tree <pin> ?-mode exact|short|node? ?-l depth? ?-max_nodes count?" \
+        "  show_tree -help" \
+        "" \
+        "Arguments:" \
+        "  <pin>              One exact cell pin. Tracing starts from every output" \
+        "                     pin of the cell that owns this pin." \
+        "" \
+        "Options:" \
+        "  -mode exact        Show full hierarchy for every node. This is the default." \
+        "                     No short-name mapping is written." \
+        "  -mode short        Show abbreviated hierarchy for every node." \
+        "                     A short-name-to-full-name mapping is written." \
+        "  -mode node         Show node0 (0), node1 (1), ... for every node." \
+        "                     A node-name-to-full-name mapping is written." \
+        "  -l depth           Maximum traversal depth. Default: 0 (no depth limit)." \
+        "  -max_nodes count   Maximum traversed node occurrences. Default: 100000." \
+        "                     Use 0 for no node limit." \
+        "  -help              Print this help page and return without tracing." \
+        "" \
+        "Output:" \
+        "  show_tree.rpt      Vertical tree, optional mapping, and traversal summary." \
+        "" \
+        "Examples:" \
+        "  show_tree top/u_buf/A" \
+        "  show_tree top/u_buf/A -l 5" \
+        "  show_tree top/u_buf/A -mode short" \
+        "  show_tree -mode node top/u_buf/A -l 3" \
+    ] "\n"]
 }
 
 proc show_tree {args} {
@@ -596,13 +640,27 @@ proc show_tree {args} {
     set user_pin ""
     set depth_limit $::show_tree::default_depth_limit
     set max_visit_count $::show_tree::max_visit_count
-    set node_mode 0
+    set display_mode "exact"
     set argc [llength $args]
     for {set i 0} {$i < $argc} {incr i} {
         set opt [lindex $args $i]
         switch -- $opt {
+            -help {
+                puts [::show_tree::help_text]
+                return
+            }
+            -mode {
+                incr i
+                if {$i >= $argc} {
+                    error "show_tree: missing value for -mode. Expected exact, short, or node."
+                }
+                set display_mode [string tolower [lindex $args $i]]
+                if {[lsearch -exact {exact short node} $display_mode] < 0} {
+                    error "show_tree: invalid -mode '$display_mode'. Expected exact, short, or node."
+                }
+            }
             -node {
-                set node_mode 1
+                error "show_tree: -node was replaced by '-mode node'. Use 'show_tree -help' for details."
             }
             -l {
                 incr i
@@ -626,7 +684,7 @@ proc show_tree {args} {
             }
             default {
                 if {[string match "-*" $opt]} {
-                    error "show_tree: unknown option '$opt'. Usage: show_tree ?-node? <pin> ?-l depth? ?-max_nodes count?"
+                    error "show_tree: unknown option '$opt'. Use 'show_tree -help' for usage."
                 }
                 if {$user_pin ne ""} {
                     error "show_tree: multiple pins specified ('$user_pin' and '$opt'). Please provide one exact pin."
@@ -636,7 +694,7 @@ proc show_tree {args} {
         }
     }
     if {$user_pin eq ""} {
-        error "show_tree: missing pin. Usage: show_tree ?-node? <pin> ?-l depth? ?-max_nodes count?"
+        error "show_tree: missing pin. Use 'show_tree -help' for usage."
     }
     set ::show_tree::max_visit_count $max_visit_count
 
@@ -677,7 +735,7 @@ proc show_tree {args} {
     puts $fh "# root_output_pins: [llength $root_pin_names]"
     puts $fh "# depth_limit: $depth_limit"
     puts $fh "# max_nodes: $max_visit_count"
-    puts $fh "# node_mode: $node_mode"
+    puts $fh "# mode: $display_mode"
     puts $fh "# layout: vertical"
     puts $fh ""
     flush $fh
@@ -689,7 +747,7 @@ proc show_tree {args} {
     }
 
     foreach root_node_id $root_node_ids {
-        ::show_tree::assign_node_labels $root_node_id $node_mode
+        ::show_tree::assign_node_labels $root_node_id $display_mode
     }
 
     puts "show_tree: writing vertical report..."
@@ -699,7 +757,7 @@ proc show_tree {args} {
         flush $fh
     }
 
-    ::show_tree::write_mapping $fh $node_mode
+    ::show_tree::write_mapping $fh $display_mode
     puts $fh ""
     puts $fh "# traversed_nodes: $::show_tree::visit_count"
     puts $fh "# tree_nodes: $::show_tree::tree_node_count"
