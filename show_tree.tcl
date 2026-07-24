@@ -12,7 +12,7 @@
 #   show_tree.rpt
 
 namespace eval ::show_tree {
-    variable script_version "2026-07-24.6-vertical"
+    variable script_version "2026-07-24.7-vertical"
     variable rpt_file "show_tree.rpt"
     variable default_depth_limit 0
     variable max_visit_count 100000
@@ -460,6 +460,7 @@ proc ::show_tree::build_subtree {pin_name depth path depth_limit} {
 proc ::show_tree::assign_node_labels {node_id display_mode} {
     variable node_pin
     variable node_depth
+    variable node_status
     variable node_children
     variable node_label
     variable node_display_serial
@@ -467,20 +468,21 @@ proc ::show_tree::assign_node_labels {node_id display_mode} {
 
     set pin_name $node_pin($node_id)
     set depth $node_depth($node_id)
-    switch -- $display_mode {
-        exact {
-            set label "$pin_name ($depth)"
-        }
-        short {
-            set label "[short_pin_name $pin_name $depth] ($depth)"
-        }
-        node {
-            set label "node${node_display_serial} ($depth)"
-            incr node_display_serial
-            set mapping_entries($label) $pin_name
-        }
-        default {
-            error "show_tree: internal error: unsupported mode '$display_mode'."
+    if {$display_mode eq "exact" || $node_status($node_id) ne "INTERNAL"} {
+        set label "$pin_name ($depth)"
+    } else {
+        switch -- $display_mode {
+            short {
+                set label "[short_pin_name $pin_name $depth] ($depth)"
+            }
+            node {
+                set label "node${node_display_serial} ($depth)"
+                incr node_display_serial
+                set mapping_entries($label) $pin_name
+            }
+            default {
+                error "show_tree: internal error: unsupported mode '$display_mode'."
+            }
         }
     }
 
@@ -590,10 +592,10 @@ proc ::show_tree::help_text {} {
         "Options:" \
         "  -mode exact        Show full hierarchy for every node. This is the default." \
         "                     No short-name mapping is written." \
-        "  -mode short        Show abbreviated hierarchy for every node." \
-        "                     A short-name-to-full-name mapping is written." \
-        "  -mode node         Show node0 (0), node1 (1), ... for every node." \
-        "                     A node-name-to-full-name mapping is written." \
+        "  -mode short        Abbreviate expandable nodes and write their mapping." \
+        "                     Terminal nodes always show full hierarchy." \
+        "  -mode node         Show node0 (0), node1 (1), ... for expandable nodes" \
+        "                     and write their mapping. Terminal nodes show full hierarchy." \
         "  -l depth           Maximum traversal depth. Default: 0 (no depth limit)." \
         "  -max_nodes count   Maximum traversed node occurrences. Default: 100000." \
         "                     Use 0 for no node limit." \
