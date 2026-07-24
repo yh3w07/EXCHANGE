@@ -9,6 +9,7 @@
 #   show_tree.rpt
 
 namespace eval ::show_tree {
+    variable script_version "2026-07-23.2"
     variable rpt_file "show_tree.rpt"
     variable default_depth_limit 0
     variable max_visit_count 100000
@@ -141,7 +142,9 @@ proc ::show_tree::cell_is_macro {cell_obj} {
         return 0
     }
 
-    foreach attr {is_hard_macro is_macro is_block is_hierarchical} {
+    # is_hierarchical/is_block are not macro-only attributes in PrimeTime.
+    # Using them here can classify ordinary hierarchy or wrapper cells as macros.
+    foreach attr {is_hard_macro is_macro} {
         if {[bool_attr $cell_obj $attr]} {
             return 1
         }
@@ -149,7 +152,7 @@ proc ::show_tree::cell_is_macro {cell_obj} {
 
     set lib_cell [get_lib_cell $cell_obj]
     if {$lib_cell ne ""} {
-        foreach attr {is_hard_macro is_macro is_block is_hierarchical} {
+        foreach attr {is_hard_macro is_macro} {
             if {[bool_attr $lib_cell $attr]} {
                 return 1
             }
@@ -185,16 +188,19 @@ proc ::show_tree::pin_is_terminal {pin_name} {
         return 1
     }
 
+    # Every node expanded by write_subtree must be an output pin.
+    # Combinational input pins are converted to their cell output pins in
+    # get_child_pin_names; leaf input pins are printed and stop here.
+    if {![is_output_direction $pin_obj]} {
+        return 1
+    }
+
     if {[pin_is_sequential_clock $pin_obj]} {
         return 1
     }
 
     set cell_obj [get_pin_cell $pin_obj]
     if {$cell_obj ne "" && [cell_is_macro $cell_obj]} {
-        return 1
-    }
-
-    if {![is_output_direction $pin_obj]} {
         return 1
     }
 
@@ -513,6 +519,7 @@ proc show_tree {user_pin args} {
 
     set fh [open $::show_tree::rpt_file w]
     puts $fh "# show_tree report"
+    puts $fh "# script_version: $::show_tree::script_version"
     puts $fh "# user_pin: [get_object_name $user_pin_obj]"
     puts $fh "# root_cell: [get_object_name $user_cell]"
     puts $fh "# root_output_pins: [llength $root_pin_names]"
@@ -536,5 +543,5 @@ proc show_tree {user_pin args} {
     }
     close $fh
 
-    puts "show_tree: wrote $::show_tree::rpt_file"
+    puts "show_tree: wrote $::show_tree::rpt_file (version $::show_tree::script_version)"
 }
