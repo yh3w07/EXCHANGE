@@ -4,21 +4,33 @@
 #   source show_tree.tcl
 #   show_tree a/b/c/buf/A
 #   show_tree a/b/c/buf/A -l 3
+#   show_tree a/b/c/buf/A -node
+#   show_tree -node a/b/c/buf/A -l 3
 #
 # Output:
 #   show_tree.rpt
 
 namespace eval ::show_tree {
-    variable script_version "2026-07-23.2"
+    variable script_version "2026-07-24.1"
     variable rpt_file "show_tree.rpt"
     variable default_depth_limit 0
     variable max_visit_count 100000
     variable flush_interval 1000
     variable clock_pin_names {CK CP CLK ECK}
     variable macro_ref_patterns {*SRAM* *RAM* *ROM* *RF* *MEM* *MACRO*}
-    variable short_to_full
+    variable short_owner
     variable full_to_short
-    variable visited
+    variable mapping_entries
+    variable terminal_cache
+    variable child_cache
+    variable node_pin
+    variable node_depth
+    variable node_status
+    variable node_children
+    variable node_label
+    variable level_width
+    variable tree_node_count
+    variable node_display_serial
     variable visit_count
     variable line_count
     variable stopped_by_max_visit
@@ -309,47 +321,157 @@ proc ::show_tree::get_child_pin_names {pin_name} {
     return [lsort -dictionary -unique $child_names]
 }
 
-proc ::show_tree::short_pin_name {pin_name} {
-    variable short_to_full
-    variable full_to_short
+proc ::show_tree::cached_pin_is_terminal {pin_name} {
+    variable terminal_cache
 
-    set parts [split $pin_name "/"]
-    set count [llength $parts]
-    if {$count <= 2} {
-        set short_name $pin_name
-    } else {
-        set short_parts {}
-        for {set i 0} {$i < $count} {incr i} {
-            set part [lindex $parts $i]
-            if {$i < ($count - 2)} {
-                lappend short_parts [string index $part end]
-            } else {
-                lappend short_parts $part
-            }
-        }
-        set short_name [join $short_parts "/"]
+    if {![info exists terminal_cache($pin_name)]} {
+        set terminal_cache($pin_name) [pin_is_terminal $pin_name]
     }
+    return $terminal_cache($pin_name)
+}
 
-    if {$short_name ne $pin_name} {
-        if {[info exists full_to_short($pin_name)]} {
-            return $full_to_short($pin_name)
-        }
+proc ::show_tree::cached_child_pin_names {pin_name} {
+    variable child_cache
 
-        if {![info exists short_to_full($short_name)]} {
-            set short_to_full($short_name) $pin_name
-        } elseif {$short_to_full($short_name) ne $pin_name} {
-            set base_name $short_name
-            set index 2
-            while {[info exists short_to_full("${base_name}#${index}")]} {
-                incr index
+    if {![info exists child_cache($pin_name)]} {
+        set child_cache($pin_name) [get_child_pin_names $pin_name]
+    }
+    return $child_cache($pin_name)
+}
+
+proc ::show_tree::short_pin_name {pin_name depth} {
+    variable short_owner
+    variable full_to_short
+    variable mapping_entries
+
+    if {[info exists full_to_short($pin_name)]} {
+        set short_name $full_to_short($pin_name)
+    } else {
+        set parts [split $pin_name "/"]
+        set count [llength $parts]
+        if {$count <= 2} {
+            set base_name $pin_name
+        } else {
+            set short_parts {}
+            for {set i 0} {$i < $count} {incr i} {
+                set part [lindex $parts $i]
+                if {$i < ($count - 2)} {
+                    lappend short_parts [string index $part end]
+                } else {
+                    lappend short_parts $part
+                }
             }
-            set short_name "${base_name}#${index}"
-            set short_to_full($short_name) $pin_name
+            set base_name [join $short_parts "/"]
         }
+
+        set short_name $base_name
+        set collision_index 2
+        while {[info exists short_owner($short_name)] &&
+               $short_owner($short_name) ne $pin_name} {
+            set short_name "${base_name}#${collision_index}"
+            incr collision_index
+        }
+
+        set short_owner($short_name) $pin_name
         set full_to_short($pin_name) $short_name
     }
 
+    if {$short_name ne $pin_name} {
+        set mapping_key "$short_name ($depth)"
+        set mapping_entries($mapping_key) $pin_name
+    }
     return $short_name
+}
+
+proc ::show_tree::build_subtree {pin_name depth path depth_limit} {
+    variable tree_node_count
+    variable node_pin
+    variable node_depth
+    variable node_status
+    variable node_children
+    variable visit_count
+    variable max_visit_count
+    variable stopped_by_max_visit
+
+    set node_id $tree_node_count
+    incr tree_node_count
+    set node_pin($node_id) $pin_name
+    set node_depth($node_id) $depth
+    set node_children($node_id) {}
+
+    if {[lsearch -exact $path $pin_name] >= 0} {
+        set node_status($node_id) "CYCLE"
+        return $node_id
+    }
+
+    if {$max_visit_count > 0 && $visit_count >= $max_visit_count} {
+        set stopped_by_max_visit 1
+        set node_status($node_id) "MAX_VISIT"
+        return $node_id
+    }
+
+    incr visit_count
+
+    if {$depth_limit > 0 && $depth >= $depth_limit} {
+        set node_status($node_id) "MAX_DEPTH"
+        return $node_id
+    }
+
+    if {[cached_pin_is_terminal $pin_name]} {
+        set node_status($node_id) "LEAF"
+        return $node_id
+    }
+
+    set child_names [cached_child_pin_names $pin_name]
+    if {[llength $child_names] == 0} {
+        set node_status($node_id) "LEAF"
+        return $node_id
+    }
+
+    set node_status($node_id) "INTERNAL"
+    set child_path [concat $path [list $pin_name]]
+    foreach child_name $child_names {
+        set child_id [build_subtree $child_name [expr {$depth + 1}] $child_path $depth_limit]
+        lappend node_children($node_id) $child_id
+    }
+    return $node_id
+}
+
+proc ::show_tree::assign_node_labels {node_id node_mode} {
+    variable node_pin
+    variable node_depth
+    variable node_status
+    variable node_children
+    variable node_label
+    variable level_width
+    variable node_display_serial
+
+    set pin_name $node_pin($node_id)
+    set depth $node_depth($node_id)
+    if {$node_status($node_id) eq "INTERNAL"} {
+        if {$node_mode} {
+            if {$depth == 0} {
+                set label "$pin_name ($depth)"
+            } else {
+                set label "o${node_display_serial}_${depth}"
+                incr node_display_serial
+            }
+        } else {
+            set label "[short_pin_name $pin_name $depth] ($depth)"
+        }
+    } else {
+        set label "$pin_name ($depth)"
+    }
+
+    set node_label($node_id) $label
+    set label_width [string length $label]
+    if {![info exists level_width($depth)] || $label_width > $level_width($depth)} {
+        set level_width($depth) $label_width
+    }
+
+    foreach child_id $node_children($node_id) {
+        assign_node_labels $child_id $node_mode
+    }
 }
 
 proc ::show_tree::spaces {count} {
@@ -370,97 +492,113 @@ proc ::show_tree::write_line {fh line} {
     }
 }
 
-proc ::show_tree::write_subtree {fh pin_name depth path depth_limit first_prefix rest_prefix} {
-    variable visited
-    variable visit_count
-    variable max_visit_count
-    variable stopped_by_max_visit
-
-    set label "[short_pin_name $pin_name] ($depth)"
-
-    if {[lsearch -exact $path $pin_name] >= 0} {
-        write_line $fh "${first_prefix}${label} \[CYCLE\]"
-        return
-    }
-
-    if {[info exists visited($pin_name)]} {
-        write_line $fh "${first_prefix}${label} \[VISITED\]"
-        return
-    }
-
-    if {$max_visit_count > 0 && $visit_count >= $max_visit_count} {
-        set stopped_by_max_visit 1
-        write_line $fh "${first_prefix}${label} \[MAX_VISIT\]"
-        return
-    }
-
-    set visited($pin_name) 1
-    incr visit_count
-
-    if {$depth_limit > 0 && $depth >= $depth_limit} {
-        write_line $fh "${first_prefix}${label} \[MAX_DEPTH\]"
-        return
-    }
-
-    if {[pin_is_terminal $pin_name]} {
-        write_line $fh "${first_prefix}${label}"
-        return
-    }
-
-    set child_names [get_child_pin_names $pin_name]
-    if {[llength $child_names] == 0} {
-        write_line $fh "${first_prefix}${label}"
-        return
-    }
-
-    set child_path [concat $path [list $pin_name]]
-    set is_first_child 1
-    set child_rest_prefix "${rest_prefix}[spaces [expr {[string length $label] + 5}]]"
-
-    foreach child_name $child_names {
-        if {$is_first_child} {
-            set child_first_prefix "${first_prefix}${label} --- "
-            set is_first_child 0
-        } else {
-            set child_first_prefix "${rest_prefix}[spaces [string length $label]] --- "
+proc ::show_tree::status_suffix {status} {
+    switch -- $status {
+        CYCLE {
+            return " \[CYCLE\]"
         }
-
-        write_subtree $fh $child_name [expr {$depth + 1}] $child_path $depth_limit $child_first_prefix $child_rest_prefix
+        MAX_DEPTH {
+            return " \[MAX_DEPTH\]"
+        }
+        MAX_VISIT {
+            return " \[MAX_VISIT\]"
+        }
+        default {
+            return ""
+        }
     }
 }
 
-proc ::show_tree::write_mapping {fh} {
-    variable short_to_full
+proc ::show_tree::write_subtree {fh node_id first_prefix rest_prefix} {
+    variable node_depth
+    variable node_status
+    variable node_children
+    variable node_label
+    variable level_width
 
-    set keys [array names short_to_full]
+    set label $node_label($node_id)
+    set status $node_status($node_id)
+    if {$status ne "INTERNAL"} {
+        write_line $fh "${first_prefix}${label}[status_suffix $status]"
+        return
+    }
+
+    set depth $node_depth($node_id)
+    set column_width $level_width($depth)
+    set padded_label "${label}[spaces [expr {$column_width - [string length $label]}]]"
+    set child_rest_prefix "${rest_prefix}[spaces [expr {$column_width + 5}]]"
+    set is_first_child 1
+
+    foreach child_id $node_children($node_id) {
+        if {$is_first_child} {
+            set child_first_prefix "${first_prefix}${padded_label} --- "
+            set is_first_child 0
+        } else {
+            set child_first_prefix "${rest_prefix}[spaces $column_width] --- "
+        }
+        write_subtree $fh $child_id $child_first_prefix $child_rest_prefix
+    }
+}
+
+proc ::show_tree::write_mapping {fh node_mode} {
+    variable mapping_entries
+
+    if {$node_mode} {
+        return
+    }
+
+    set keys [array names mapping_entries]
     if {[llength $keys] == 0} {
         return
     }
 
     puts $fh ""
-    puts $fh "# short_name => full_name"
-    foreach short_name [lsort -dictionary $keys] {
-        puts $fh "$short_name => $short_to_full($short_name)"
+    puts $fh "# short_name (level) => full_name"
+    foreach mapping_key [lsort -dictionary $keys] {
+        puts $fh "$mapping_key => $mapping_entries($mapping_key)"
     }
 }
 
-proc show_tree {user_pin args} {
-    array unset ::show_tree::short_to_full
-    array set ::show_tree::short_to_full {}
+proc show_tree {args} {
+    array unset ::show_tree::short_owner
+    array set ::show_tree::short_owner {}
     array unset ::show_tree::full_to_short
     array set ::show_tree::full_to_short {}
-    array unset ::show_tree::visited
-    array set ::show_tree::visited {}
+    array unset ::show_tree::mapping_entries
+    array set ::show_tree::mapping_entries {}
+    array unset ::show_tree::terminal_cache
+    array set ::show_tree::terminal_cache {}
+    array unset ::show_tree::child_cache
+    array set ::show_tree::child_cache {}
+    array unset ::show_tree::node_pin
+    array set ::show_tree::node_pin {}
+    array unset ::show_tree::node_depth
+    array set ::show_tree::node_depth {}
+    array unset ::show_tree::node_status
+    array set ::show_tree::node_status {}
+    array unset ::show_tree::node_children
+    array set ::show_tree::node_children {}
+    array unset ::show_tree::node_label
+    array set ::show_tree::node_label {}
+    array unset ::show_tree::level_width
+    array set ::show_tree::level_width {}
+    set ::show_tree::tree_node_count 0
+    set ::show_tree::node_display_serial 0
     set ::show_tree::visit_count 0
     set ::show_tree::line_count 0
     set ::show_tree::stopped_by_max_visit 0
 
+    set user_pin ""
     set depth_limit $::show_tree::default_depth_limit
     set max_visit_count $::show_tree::max_visit_count
+    set node_mode 0
     set argc [llength $args]
     for {set i 0} {$i < $argc} {incr i} {
         set opt [lindex $args $i]
         switch -- $opt {
+            -node {
+                set node_mode 1
+            }
             -l {
                 incr i
                 if {$i >= $argc} {
@@ -482,9 +620,18 @@ proc show_tree {user_pin args} {
                 }
             }
             default {
-                error "show_tree: unknown option '$opt'. Usage: show_tree <pin> ?-l depth? ?-max_nodes count?"
+                if {[string match "-*" $opt]} {
+                    error "show_tree: unknown option '$opt'. Usage: show_tree ?-node? <pin> ?-l depth? ?-max_nodes count?"
+                }
+                if {$user_pin ne ""} {
+                    error "show_tree: multiple pins specified ('$user_pin' and '$opt'). Please provide one exact pin."
+                }
+                set user_pin $opt
             }
         }
+    }
+    if {$user_pin eq ""} {
+        error "show_tree: missing pin. Usage: show_tree ?-node? <pin> ?-l depth? ?-max_nodes count?"
     }
     set ::show_tree::max_visit_count $max_visit_count
 
@@ -525,18 +672,31 @@ proc show_tree {user_pin args} {
     puts $fh "# root_output_pins: [llength $root_pin_names]"
     puts $fh "# depth_limit: $depth_limit"
     puts $fh "# max_nodes: $max_visit_count"
+    puts $fh "# node_mode: $node_mode"
     puts $fh ""
     flush $fh
 
+    puts "show_tree: scanning connectivity..."
+    set root_node_ids {}
     foreach root_pin_name $root_pin_names {
-        ::show_tree::write_subtree $fh $root_pin_name 0 {} $depth_limit "" ""
+        lappend root_node_ids [::show_tree::build_subtree $root_pin_name 0 {} $depth_limit]
+    }
+
+    foreach root_node_id $root_node_ids {
+        ::show_tree::assign_node_labels $root_node_id $node_mode
+    }
+
+    puts "show_tree: writing aligned report..."
+    foreach root_node_id $root_node_ids {
+        ::show_tree::write_subtree $fh $root_node_id "" ""
         puts $fh ""
         flush $fh
     }
 
-    ::show_tree::write_mapping $fh
+    ::show_tree::write_mapping $fh $node_mode
     puts $fh ""
-    puts $fh "# visited_nodes: $::show_tree::visit_count"
+    puts $fh "# traversed_nodes: $::show_tree::visit_count"
+    puts $fh "# tree_nodes: $::show_tree::tree_node_count"
     puts $fh "# report_lines: $::show_tree::line_count"
     if {$::show_tree::stopped_by_max_visit} {
         puts $fh "# WARNING: traversal stopped by max_nodes limit."
