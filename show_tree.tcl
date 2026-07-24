@@ -11,7 +11,7 @@
 #   show_tree.rpt
 
 namespace eval ::show_tree {
-    variable script_version "2026-07-24.4"
+    variable script_version "2026-07-24.5-vertical"
     variable rpt_file "show_tree.rpt"
     variable default_depth_limit 0
     variable max_visit_count 100000
@@ -28,7 +28,6 @@ namespace eval ::show_tree {
     variable node_status
     variable node_children
     variable node_label
-    variable level_width
     variable tree_node_count
     variable node_display_serial
     variable visit_count
@@ -463,7 +462,6 @@ proc ::show_tree::assign_node_labels {node_id node_mode} {
     variable node_status
     variable node_children
     variable node_label
-    variable level_width
     variable node_display_serial
     variable mapping_entries
 
@@ -482,21 +480,10 @@ proc ::show_tree::assign_node_labels {node_id node_mode} {
     }
 
     set node_label($node_id) $label
-    set label_width [string length $label]
-    if {![info exists level_width($depth)] || $label_width > $level_width($depth)} {
-        set level_width($depth) $label_width
-    }
 
     foreach child_id $node_children($node_id) {
         assign_node_labels $child_id $node_mode
     }
-}
-
-proc ::show_tree::spaces {count} {
-    if {$count <= 0} {
-        return ""
-    }
-    return [string repeat " " $count]
 }
 
 proc ::show_tree::write_line {fh line} {
@@ -527,46 +514,36 @@ proc ::show_tree::status_suffix {status} {
     }
 }
 
-proc ::show_tree::write_subtree {fh node_id first_prefix rest_prefix} {
-    variable node_depth
+proc ::show_tree::write_subtree {fh node_id prefix is_root is_last} {
     variable node_status
     variable node_children
     variable node_label
-    variable level_width
 
     set label $node_label($node_id)
     set status $node_status($node_id)
+    if {$is_root} {
+        write_line $fh "${label}[status_suffix $status]"
+        set child_prefix ""
+    } else {
+        write_line $fh "${prefix}|-- ${label}[status_suffix $status]"
+        if {$is_last} {
+            set child_prefix "${prefix}    "
+        } else {
+            set child_prefix "${prefix}|   "
+        }
+    }
+
     if {$status ne "INTERNAL"} {
-        write_line $fh "${first_prefix}${label}[status_suffix $status]"
         return
     }
 
-    set depth $node_depth($node_id)
-    set column_width $level_width($depth)
-    set first_link_dash_count [expr {$column_width - [string length $label] + 3}]
-    set first_link "${label} [string repeat "-" $first_link_dash_count] "
     set child_ids $node_children($node_id)
     set child_count [llength $child_ids]
 
     for {set child_index 0} {$child_index < $child_count} {incr child_index} {
         set child_id [lindex $child_ids $child_index]
-        set has_later_sibling [expr {$child_index < ($child_count - 1)}]
-
-        if {$child_index == 0} {
-            set child_first_prefix "${first_prefix}${first_link}"
-        } else {
-            set child_first_prefix "${rest_prefix}|[string repeat "-" [expr {$column_width + 3}]] "
-        }
-
-        # Continuation rows keep only the vertical marker; horizontal dashes
-        # would incorrectly connect a later sibling to the current child.
-        if {$has_later_sibling} {
-            set child_rest_prefix "${rest_prefix}|[spaces [expr {$column_width + 4}]]"
-        } else {
-            set child_rest_prefix "${rest_prefix}[spaces [expr {$column_width + 5}]]"
-        }
-
-        write_subtree $fh $child_id $child_first_prefix $child_rest_prefix
+        set child_is_last [expr {$child_index == ($child_count - 1)}]
+        write_subtree $fh $child_id $child_prefix 0 $child_is_last
     }
 }
 
@@ -610,8 +587,6 @@ proc show_tree {args} {
     array set ::show_tree::node_children {}
     array unset ::show_tree::node_label
     array set ::show_tree::node_label {}
-    array unset ::show_tree::level_width
-    array set ::show_tree::level_width {}
     set ::show_tree::tree_node_count 0
     set ::show_tree::node_display_serial 0
     set ::show_tree::visit_count 0
@@ -703,6 +678,7 @@ proc show_tree {args} {
     puts $fh "# depth_limit: $depth_limit"
     puts $fh "# max_nodes: $max_visit_count"
     puts $fh "# node_mode: $node_mode"
+    puts $fh "# layout: vertical"
     puts $fh ""
     flush $fh
 
@@ -716,9 +692,9 @@ proc show_tree {args} {
         ::show_tree::assign_node_labels $root_node_id $node_mode
     }
 
-    puts "show_tree: writing aligned report..."
+    puts "show_tree: writing vertical report..."
     foreach root_node_id $root_node_ids {
-        ::show_tree::write_subtree $fh $root_node_id "" ""
+        ::show_tree::write_subtree $fh $root_node_id "" 1 1
         puts $fh ""
         flush $fh
     }
