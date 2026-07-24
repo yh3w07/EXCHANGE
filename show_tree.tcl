@@ -11,7 +11,7 @@
 #   show_tree.rpt
 
 namespace eval ::show_tree {
-    variable script_version "2026-07-24.1"
+    variable script_version "2026-07-24.2"
     variable rpt_file "show_tree.rpt"
     variable default_depth_limit 0
     variable max_visit_count 100000
@@ -131,6 +131,22 @@ proc ::show_tree::cell_is_sequential {cell_obj} {
     return 0
 }
 
+proc ::show_tree::cell_is_integrated_clock_gating {cell_obj} {
+    if {$cell_obj eq ""} {
+        return 0
+    }
+    if {[bool_attr $cell_obj is_integrated_clock_gating_cell]} {
+        return 1
+    }
+
+    set lib_cell [get_lib_cell $cell_obj]
+    if {$lib_cell ne "" &&
+        [bool_attr $lib_cell is_integrated_clock_gating_cell]} {
+        return 1
+    }
+    return 0
+}
+
 proc ::show_tree::cell_is_combinational {cell_obj} {
     if {$cell_obj eq ""} {
         return 0
@@ -191,7 +207,9 @@ proc ::show_tree::pin_is_clock_name {pin_obj} {
 
 proc ::show_tree::pin_is_sequential_clock {pin_obj} {
     set cell_obj [get_pin_cell $pin_obj]
-    return [expr {[cell_is_sequential $cell_obj] && [pin_is_clock_name $pin_obj]}]
+    return [expr {[cell_is_sequential $cell_obj] &&
+                  ![cell_is_integrated_clock_gating $cell_obj] &&
+                  [pin_is_clock_name $pin_obj]}]
 }
 
 proc ::show_tree::pin_is_terminal {pin_name} {
@@ -302,7 +320,9 @@ proc ::show_tree::get_child_pin_names {pin_name} {
             continue
         }
 
-        if {![cell_is_combinational $leaf_cell] && [cell_is_sequential $leaf_cell]} {
+        if {![cell_is_integrated_clock_gating $leaf_cell] &&
+            ![cell_is_combinational $leaf_cell] &&
+            [cell_is_sequential $leaf_cell]} {
             lappend child_names $leaf_pin_name
             continue
         }
@@ -445,17 +465,15 @@ proc ::show_tree::assign_node_labels {node_id node_mode} {
     variable node_label
     variable level_width
     variable node_display_serial
+    variable mapping_entries
 
     set pin_name $node_pin($node_id)
     set depth $node_depth($node_id)
     if {$node_status($node_id) eq "INTERNAL"} {
         if {$node_mode} {
-            if {$depth == 0} {
-                set label "$pin_name ($depth)"
-            } else {
-                set label "o${node_display_serial}_${depth}"
-                incr node_display_serial
-            }
+            set label "o${node_display_serial}_${depth}"
+            incr node_display_serial
+            set mapping_entries($label) $pin_name
         } else {
             set label "[short_pin_name $pin_name $depth] ($depth)"
         }
@@ -543,17 +561,17 @@ proc ::show_tree::write_subtree {fh node_id first_prefix rest_prefix} {
 proc ::show_tree::write_mapping {fh node_mode} {
     variable mapping_entries
 
-    if {$node_mode} {
-        return
-    }
-
     set keys [array names mapping_entries]
     if {[llength $keys] == 0} {
         return
     }
 
     puts $fh ""
-    puts $fh "# short_name (level) => full_name"
+    if {$node_mode} {
+        puts $fh "# node_name => full_name"
+    } else {
+        puts $fh "# short_name (level) => full_name"
+    }
     foreach mapping_key [lsort -dictionary $keys] {
         puts $fh "$mapping_key => $mapping_entries($mapping_key)"
     }
