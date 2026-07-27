@@ -12,7 +12,7 @@
 #   show_tree.rpt
 
 namespace eval ::show_tree {
-    variable script_version "2026-07-24.7-vertical"
+    variable script_version "2026-07-27.1-vertical"
     variable rpt_file "show_tree.rpt"
     variable default_depth_limit 0
     variable max_visit_count 100000
@@ -420,7 +420,7 @@ proc ::show_tree::build_subtree {pin_name depth path depth_limit} {
     set node_children($node_id) {}
 
     if {[lsearch -exact $path $pin_name] >= 0} {
-        set node_status($node_id) "CYCLE"
+        set node_status($node_id) "COMB_LOOP"
         return $node_id
     }
 
@@ -506,8 +506,8 @@ proc ::show_tree::write_line {fh line} {
 
 proc ::show_tree::status_suffix {status} {
     switch -- $status {
-        CYCLE {
-            return " \[CYCLE\]"
+        COMB_LOOP {
+            return " \[COMB_LOOP\]"
         }
         MAX_DEPTH {
             return " \[MAX_DEPTH\]"
@@ -528,11 +528,13 @@ proc ::show_tree::write_subtree {fh node_id prefix is_root is_last} {
 
     set label $node_label($node_id)
     set status $node_status($node_id)
+    set fanout_count [llength $node_children($node_id)]
+    set display_label "${label} (FO: $fanout_count)"
     if {$is_root} {
-        write_line $fh "${label}[status_suffix $status]"
+        write_line $fh "${display_label}[status_suffix $status]"
         set child_prefix ""
     } else {
-        write_line $fh "${prefix}|-- ${label}[status_suffix $status]"
+        write_line $fh "${prefix}|-- ${display_label}[status_suffix $status]"
         if {$is_last} {
             set child_prefix "${prefix}    "
         } else {
@@ -602,7 +604,8 @@ proc ::show_tree::help_text {} {
         "  -help              Print this help page and return without tracing." \
         "" \
         "Output:" \
-        "  show_tree.rpt      Vertical tree, optional mapping, and traversal summary." \
+        "  show_tree.rpt      Vertical tree, direct child fanout count (FO), optional" \
+        "                     mapping, and traversal summary." \
         "" \
         "Examples:" \
         "  show_tree top/u_buf/A" \
