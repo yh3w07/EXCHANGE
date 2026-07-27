@@ -12,7 +12,7 @@
 #   show_tree.rpt
 
 namespace eval ::show_tree {
-    variable script_version "2026-07-27.1-vertical"
+    variable script_version "2026-07-27.2-vertical"
     variable rpt_file "show_tree.rpt"
     variable default_depth_limit 0
     variable max_visit_count 100000
@@ -170,23 +170,19 @@ proc ::show_tree::cell_is_macro {cell_obj} {
         return 0
     }
 
-    # is_hierarchical/is_block are not macro-only attributes in PrimeTime.
-    # Using them here can classify ordinary hierarchy or wrapper cells as macros.
-    foreach attr {is_hard_macro is_macro} {
-        if {[bool_attr $cell_obj $attr]} {
-            return 1
-        }
+    # PrimeTime does not define is_macro/is_hard_macro for cell or lib_cell.
+    # is_memory_cell is the supported classification for memory macros.
+    if {[bool_attr $cell_obj is_memory_cell]} {
+        return 1
     }
 
     set lib_cell [get_lib_cell $cell_obj]
-    if {$lib_cell ne ""} {
-        foreach attr {is_hard_macro is_macro} {
-            if {[bool_attr $lib_cell $attr]} {
-                return 1
-            }
-        }
+    if {$lib_cell ne "" && [bool_attr $lib_cell is_memory_cell]} {
+        return 1
     }
 
+    # Some libraries do not classify memory macros. Keep a name-based fallback
+    # for compatibility with those libraries.
     set ref_name [safe_attr $cell_obj ref_name ""]
     foreach pattern $macro_ref_patterns {
         if {[string match -nocase $pattern $ref_name]} {
