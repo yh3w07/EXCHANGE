@@ -6,14 +6,14 @@
 #   show_tree a/b/c/buf/A -l 3
 #   show_tree a/b/c/buf/A -mode short
 #   show_tree -mode node a/b/c/buf/A -l 3
+#   show_tree a/b/c/buf/A -o custom_tree.rpt
 #   show_tree -help
 #
-# Output:
+# Default output:
 #   show_tree.rpt
 
 namespace eval ::show_tree {
-    variable script_version "2026-07-27.4-vertical"
-    variable rpt_file "show_tree.rpt"
+    variable script_version "2026-07-27.5-vertical"
     variable max_visit_count 100000
     variable flush_interval 1000
     variable clock_pin_names {CK CP CLK ECK}
@@ -527,8 +527,13 @@ proc ::show_tree::write_subtree {fh node_id prefix is_root is_last} {
 
     set label $node_label($node_id)
     set status $node_status($node_id)
-    set fanout_count [llength $node_children($node_id)]
-    set display_label "${label} (FO: $fanout_count)"
+    set child_ids $node_children($node_id)
+    set fanout_count [llength $child_ids]
+    if {$fanout_count == 0} {
+        set display_label "${label} (LEAF)"
+    } else {
+        set display_label "${label} (FO: $fanout_count)"
+    }
     if {$is_root} {
         write_line $fh "${display_label}[status_suffix $status]"
         set child_prefix ""
@@ -545,7 +550,6 @@ proc ::show_tree::write_subtree {fh node_id prefix is_root is_last} {
         return
     }
 
-    set child_ids $node_children($node_id)
     set child_count [llength $child_ids]
 
     for {set child_index 0} {$child_index < $child_count} {incr child_index} {
@@ -612,6 +616,10 @@ proc show_tree {args} {
     set depth_limit $options(-l)
     set max_visit_count $options(-max_nodes)
     set display_mode $options(-mode)
+    set output_file $options(-o)
+    if {$output_file eq ""} {
+        error "show_tree: -o must not be empty."
+    }
     set ::show_tree::max_visit_count $max_visit_count
 
     if {[catch {get_cells -quiet $user_pin} user_cells]} {
@@ -643,9 +651,12 @@ proc show_tree {args} {
         error "show_tree: cell '[get_object_name $user_cell]' has no output pins."
     }
 
-    set fh [open $::show_tree::rpt_file w]
+    if {[catch {open $output_file w} fh]} {
+        error "show_tree: cannot open output file '$output_file': $fh"
+    }
     puts $fh "# show_tree report"
     puts $fh "# script_version: $::show_tree::script_version"
+    puts $fh "# output_file: $output_file"
     puts $fh "# user_pin: [get_object_name $user_pin_obj]"
     puts $fh "# root_cell: [get_object_name $user_cell]"
     puts $fh "# root_output_pins: [llength $root_pin_names]"
@@ -683,7 +694,7 @@ proc show_tree {args} {
     }
     close $fh
 
-    puts "show_tree: wrote $::show_tree::rpt_file (version $::show_tree::script_version)"
+    puts "show_tree: wrote $output_file (version $::show_tree::script_version)"
 }
 
 define_proc_attributes show_tree \
@@ -698,4 +709,6 @@ define_proc_attributes show_tree \
             depth int {optional {min_value 0} {default 0}}}
         {-max_nodes "Maximum traversed node occurrences. Use 0 for no node limit."
             count int {optional {min_value 0} {default 100000}}}
+        {-o "Output report file name or path."
+            file string {optional {default show_tree.rpt}}}
     }
