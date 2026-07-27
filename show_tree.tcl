@@ -12,7 +12,7 @@
 #   show_tree.rpt
 
 namespace eval ::show_tree {
-    variable script_version "2026-07-27.2-vertical"
+    variable script_version "2026-07-27.3-vertical"
     variable rpt_file "show_tree.rpt"
     variable default_depth_limit 0
     variable max_visit_count 100000
@@ -163,7 +163,7 @@ proc ::show_tree::cell_is_combinational {cell_obj} {
     return 0
 }
 
-proc ::show_tree::cell_is_macro {cell_obj} {
+proc ::show_tree::cell_is_trace_boundary {cell_obj} {
     variable macro_ref_patterns
 
     if {$cell_obj eq ""} {
@@ -171,13 +171,17 @@ proc ::show_tree::cell_is_macro {cell_obj} {
     }
 
     # PrimeTime does not define is_macro/is_hard_macro for cell or lib_cell.
-    # is_memory_cell is the supported classification for memory macros.
-    if {[bool_attr $cell_obj is_memory_cell]} {
+    # Black boxes cannot be traversed, and is_memory_cell is the supported
+    # classification for memory macros.
+    if {[bool_attr $cell_obj is_black_box] ||
+        [bool_attr $cell_obj is_memory_cell]} {
         return 1
     }
 
     set lib_cell [get_lib_cell $cell_obj]
-    if {$lib_cell ne "" && [bool_attr $lib_cell is_memory_cell]} {
+    if {$lib_cell ne "" &&
+        ([bool_attr $lib_cell is_black_box] ||
+         [bool_attr $lib_cell is_memory_cell])} {
         return 1
     }
 
@@ -226,7 +230,7 @@ proc ::show_tree::pin_is_terminal {pin_name} {
     }
 
     set cell_obj [get_pin_cell $pin_obj]
-    if {$cell_obj ne "" && [cell_is_macro $cell_obj]} {
+    if {$cell_obj ne "" && [cell_is_trace_boundary $cell_obj]} {
         return 1
     }
 
@@ -311,7 +315,7 @@ proc ::show_tree::get_child_pin_names {pin_name} {
             continue
         }
 
-        if {[cell_is_macro $leaf_cell]} {
+        if {[cell_is_trace_boundary $leaf_cell]} {
             lappend child_names $leaf_pin_name
             continue
         }
@@ -598,6 +602,10 @@ proc ::show_tree::help_text {} {
         "  -max_nodes count   Maximum traversed node occurrences. Default: 100000." \
         "                     Use 0 for no node limit." \
         "  -help              Print this help page and return without tracing." \
+        "" \
+        "Traversal:" \
+        "  Stops at sequential cells, black boxes, and memory macros." \
+        "  ICG cells continue as combinational." \
         "" \
         "Output:" \
         "  show_tree.rpt      Vertical tree, direct child fanout count (FO), optional" \
