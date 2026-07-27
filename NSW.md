@@ -1,5 +1,5 @@
 # ---------------------------------------
-# NSW - NVT SDC WRAPPER Spec
+# NSW - NVT SDC WRAPPER SPEC
 # ---------------------------------------
 ## 前提: (BLK = Block)
     - 目前在BLK Level Constraint整合到Top Level Constraint有下列問題:
