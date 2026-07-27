@@ -12,9 +12,8 @@
 #   show_tree.rpt
 
 namespace eval ::show_tree {
-    variable script_version "2026-07-27.3-vertical"
+    variable script_version "2026-07-27.4-vertical"
     variable rpt_file "show_tree.rpt"
-    variable default_depth_limit 0
     variable max_visit_count 100000
     variable flush_interval 1000
     variable clock_pin_names {CK CP CLK ECK}
@@ -579,47 +578,10 @@ proc ::show_tree::write_mapping {fh display_mode} {
     }
 }
 
-proc ::show_tree::help_text {} {
-    return [join [list \
-        "show_tree - Trace downstream pin connectivity as a vertical tree." \
-        "" \
-        "Usage:" \
-        "  show_tree <pin> ?-mode exact|short|node? ?-l depth? ?-max_nodes count?" \
-        "  show_tree -help" \
-        "" \
-        "Arguments:" \
-        "  <pin>              One exact cell pin. Tracing starts from every output" \
-        "                     pin of the cell that owns this pin." \
-        "" \
-        "Options:" \
-        "  -mode exact        Show full hierarchy for every node. This is the default." \
-        "                     No short-name mapping is written." \
-        "  -mode short        Abbreviate expandable nodes and write their mapping." \
-        "                     Terminal nodes always show full hierarchy." \
-        "  -mode node         Show node0 (0), node1 (1), ... for expandable nodes" \
-        "                     and write their mapping. Terminal nodes show full hierarchy." \
-        "  -l depth           Maximum traversal depth. Default: 0 (no depth limit)." \
-        "  -max_nodes count   Maximum traversed node occurrences. Default: 100000." \
-        "                     Use 0 for no node limit." \
-        "  -help              Print this help page and return without tracing." \
-        "" \
-        "Traversal:" \
-        "  Stops at sequential cells, black boxes, and memory macros." \
-        "  ICG cells continue as combinational." \
-        "" \
-        "Output:" \
-        "  show_tree.rpt      Vertical tree, direct child fanout count (FO), optional" \
-        "                     mapping, and traversal summary." \
-        "" \
-        "Examples:" \
-        "  show_tree top/u_buf/A" \
-        "  show_tree top/u_buf/A -l 5" \
-        "  show_tree top/u_buf/A -mode short" \
-        "  show_tree -mode node top/u_buf/A -l 3" \
-    ] "\n"]
-}
-
 proc show_tree {args} {
+    array set options {}
+    parse_proc_arguments -args $args options
+
     array unset ::show_tree::short_owner
     array set ::show_tree::short_owner {}
     array unset ::show_tree::full_to_short
@@ -646,65 +608,10 @@ proc show_tree {args} {
     set ::show_tree::line_count 0
     set ::show_tree::stopped_by_max_visit 0
 
-    set user_pin ""
-    set depth_limit $::show_tree::default_depth_limit
-    set max_visit_count $::show_tree::max_visit_count
-    set display_mode "exact"
-    set argc [llength $args]
-    for {set i 0} {$i < $argc} {incr i} {
-        set opt [lindex $args $i]
-        switch -- $opt {
-            -help {
-                puts [::show_tree::help_text]
-                return
-            }
-            -mode {
-                incr i
-                if {$i >= $argc} {
-                    error "show_tree: missing value for -mode. Expected exact, short, or node."
-                }
-                set display_mode [string tolower [lindex $args $i]]
-                if {[lsearch -exact {exact short node} $display_mode] < 0} {
-                    error "show_tree: invalid -mode '$display_mode'. Expected exact, short, or node."
-                }
-            }
-            -node {
-                error "show_tree: -node was replaced by '-mode node'. Use 'show_tree -help' for details."
-            }
-            -l {
-                incr i
-                if {$i >= $argc} {
-                    error "show_tree: missing value for -l."
-                }
-                set depth_limit [lindex $args $i]
-                if {![string is integer -strict $depth_limit] || $depth_limit < 0} {
-                    error "show_tree: -l must be a non-negative integer. 0 means no limit."
-                }
-            }
-            -max_nodes {
-                incr i
-                if {$i >= $argc} {
-                    error "show_tree: missing value for -max_nodes."
-                }
-                set max_visit_count [lindex $args $i]
-                if {![string is integer -strict $max_visit_count] || $max_visit_count < 0} {
-                    error "show_tree: -max_nodes must be a non-negative integer. 0 means no limit."
-                }
-            }
-            default {
-                if {[string match "-*" $opt]} {
-                    error "show_tree: unknown option '$opt'. Use 'show_tree -help' for usage."
-                }
-                if {$user_pin ne ""} {
-                    error "show_tree: multiple pins specified ('$user_pin' and '$opt'). Please provide one exact pin."
-                }
-                set user_pin $opt
-            }
-        }
-    }
-    if {$user_pin eq ""} {
-        error "show_tree: missing pin. Use 'show_tree -help' for usage."
-    }
+    set user_pin $options(pin)
+    set depth_limit $options(-l)
+    set max_visit_count $options(-max_nodes)
+    set display_mode $options(-mode)
     set ::show_tree::max_visit_count $max_visit_count
 
     if {[catch {get_cells -quiet $user_pin} user_cells]} {
@@ -778,3 +685,17 @@ proc show_tree {args} {
 
     puts "show_tree: wrote $::show_tree::rpt_file (version $::show_tree::script_version)"
 }
+
+define_proc_attributes show_tree \
+    -info "Trace downstream pin connectivity as a vertical tree." \
+    -define_args {
+        {pin "Exact cell pin. Tracing starts from every output pin of its cell."
+            pin string required}
+        {-mode "Display hierarchy as exact names, abbreviated names, or node IDs."
+            mode one_of_string
+            {optional value_help {values {exact short node}} {default exact}}}
+        {-l "Maximum traversal depth. Use 0 for no depth limit."
+            depth int {optional {min_value 0} {default 0}}}
+        {-max_nodes "Maximum traversed node occurrences. Use 0 for no node limit."
+            count int {optional {min_value 0} {default 100000}}}
+    }
