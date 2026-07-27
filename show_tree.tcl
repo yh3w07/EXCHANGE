@@ -7,13 +7,14 @@
 #   show_tree a/b/c/buf/A -mode short
 #   show_tree -mode node a/b/c/buf/A -l 3
 #   show_tree a/b/c/buf/A -o custom_tree.rpt
+#   show_tree a/b/c/buf/A -acc
 #   show_tree -help
 #
 # Default output:
 #   show_tree.rpt
 
 namespace eval ::show_tree {
-    variable script_version "2026-07-27.5-vertical"
+    variable script_version "2026-07-27.6-vertical"
     variable max_visit_count 100000
     variable flush_interval 1000
     variable clock_pin_names {CK CP CLK ECK}
@@ -27,6 +28,7 @@ namespace eval ::show_tree {
     variable node_depth
     variable node_status
     variable node_children
+    variable node_leaf_count
     variable node_label
     variable tree_node_count
     variable node_display_serial
@@ -408,6 +410,7 @@ proc ::show_tree::build_subtree {pin_name depth path depth_limit} {
     variable node_depth
     variable node_status
     variable node_children
+    variable node_leaf_count
     variable visit_count
     variable max_visit_count
     variable stopped_by_max_visit
@@ -417,6 +420,7 @@ proc ::show_tree::build_subtree {pin_name depth path depth_limit} {
     set node_pin($node_id) $pin_name
     set node_depth($node_id) $depth
     set node_children($node_id) {}
+    set node_leaf_count($node_id) 1
 
     if {[lsearch -exact $path $pin_name] >= 0} {
         set node_status($node_id) "COMB_LOOP"
@@ -452,6 +456,10 @@ proc ::show_tree::build_subtree {pin_name depth path depth_limit} {
     foreach child_name $child_names {
         set child_id [build_subtree $child_name [expr {$depth + 1}] $child_path $depth_limit]
         lappend node_children($node_id) $child_id
+    }
+    set node_leaf_count($node_id) 0
+    foreach child_id $node_children($node_id) {
+        incr node_leaf_count($node_id) $node_leaf_count($child_id)
     }
     return $node_id
 }
@@ -520,18 +528,24 @@ proc ::show_tree::status_suffix {status} {
     }
 }
 
-proc ::show_tree::write_subtree {fh node_id prefix is_root is_last} {
+proc ::show_tree::write_subtree {fh node_id prefix is_root is_last accumulate_fanout} {
     variable node_status
     variable node_children
+    variable node_leaf_count
     variable node_label
 
     set label $node_label($node_id)
     set status $node_status($node_id)
     set child_ids $node_children($node_id)
-    set fanout_count [llength $child_ids]
-    if {$fanout_count == 0} {
+    set direct_fanout_count [llength $child_ids]
+    if {$direct_fanout_count == 0} {
         set display_label "${label} (LEAF)"
     } else {
+        if {$accumulate_fanout} {
+            set fanout_count $node_leaf_count($node_id)
+        } else {
+            set fanout_count $direct_fanout_count
+        }
         set display_label "${label} (FO: $fanout_count)"
     }
     if {$is_root} {
@@ -555,7 +569,7 @@ proc ::show_tree::write_subtree {fh node_id prefix is_root is_last} {
     for {set child_index 0} {$child_index < $child_count} {incr child_index} {
         set child_id [lindex $child_ids $child_index]
         set child_is_last [expr {$child_index == ($child_count - 1)}]
-        write_subtree $fh $child_id $child_prefix 0 $child_is_last
+        write_subtree $fh $child_id $child_prefix 0 $child_is_last $accumulate_fanout
     }
 }
 
@@ -604,6 +618,8 @@ proc show_tree {args} {
     array set ::show_tree::node_status {}
     array unset ::show_tree::node_children
     array set ::show_tree::node_children {}
+    array unset ::show_tree::node_leaf_count
+    array set ::show_tree::node_leaf_count {}
     array unset ::show_tree::node_label
     array set ::show_tree::node_label {}
     set ::show_tree::tree_node_count 0
@@ -617,6 +633,10 @@ proc show_tree {args} {
     set max_visit_count $options(-max_nodes)
     set display_mode $options(-mode)
     set output_file $options(-o)
+    set accumulate_fanout 0
+    if {[info exists options(-acc)]} {
+        set accumulate_fanout $options(-acc)
+    }
     if {$output_file eq ""} {
         error "show_tree: -o must not be empty."
     }
@@ -663,6 +683,11 @@ proc show_tree {args} {
     puts $fh "# depth_limit: $depth_limit"
     puts $fh "# max_nodes: $max_visit_count"
     puts $fh "# mode: $display_mode"
+    if {$accumulate_fanout} {
+        puts $fh "# fanout_mode: accumulated_leaf"
+    } else {
+        puts $fh "# fanout_mode: direct"
+    }
     puts $fh "# layout: vertical"
     puts $fh ""
     flush $fh
@@ -679,7 +704,7 @@ proc show_tree {args} {
 
     puts "show_tree: writing vertical report..."
     foreach root_node_id $root_node_ids {
-        ::show_tree::write_subtree $fh $root_node_id "" 1 1
+        ::show_tree::write_subtree $fh $root_node_id "" 1 1 $accumulate_fanout
         puts $fh ""
         flush $fh
     }
@@ -711,4 +736,6 @@ define_proc_attributes show_tree \
             count int {optional {min_value 0} {default 100000}}}
         {-o "Output report file name or path."
             file string {optional {default show_tree.rpt}}}
+        {-acc "Use accumulated descendant LEAF count for FO values."
+            "" boolean optional}
     }
