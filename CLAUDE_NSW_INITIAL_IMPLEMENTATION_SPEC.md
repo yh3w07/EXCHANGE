@@ -1,152 +1,246 @@
-# Claude Code Task: NSW Initial Implementation
+# Claude Code Task: Prepare Existing NSW for External Code Review
 
-## 1. Objective
+## 1. Purpose
 
-Implement a working v0.1 of **NSW (NVT SDC Wrapper)** inside the company RD environment.
+An initial NSW implementation already exists in the company RD environment.
 
-NSW is a PrimeTime runtime portability layer. The same Block-level Tcl/SDC source must remain maintainable and usable at Block, Partition, and Top hierarchy while handling clock, hierarchy, synthesis, MBFF, and library-vendor differences.
+Do **not** redesign NSW or start a new implementation for this task. Prepare a complete review handoff so another coding agent can:
 
-The Block constraint remains the single source of truth. Preserve dynamic Tcl usage such as `if`, `foreach`, `proc`, variables, collections, and PrimeTime queries.
+1. understand the current implementation;
+2. reproduce its intended behavior using synthetic data;
+3. review architecture and Tcl correctness;
+4. identify missing cases;
+5. refactor, strengthen, or replace the implementation if necessary.
+
+All NSW Tcl source files are required, but source code alone is insufficient. The additional information below is mandatory because behavior not represented in code cannot be reconstructed reliably.
 
 ## 2. Security Boundary
 
-- Company LIBs, real constraints, design names, hierarchy names, logs, and mapping tables must remain inside RD.
-- Do not upload or copy company data to GitHub or any external location.
-- Generic core code may be prepared for export only if company policy permits it.
-- Any exportable example or test must use stable synthetic names and contain no recoverable company identifiers.
-- Do not implement covert or unapproved data-transfer mechanisms.
-- Produce separate internal and export-review packages. Export still requires the normal company approval process.
+- Follow company classification and export-approval procedures.
+- Do not include real LIBs, real constraints, project names, hostnames, usernames, internal paths, or design identifiers unless explicitly approved for release.
+- Use stable synthetic identifiers when examples are required.
+- Preserve structural relationships during anonymization: hierarchy depth, bus indices, wildcard patterns, collection cardinality, clock relationships, and Tcl control flow.
+- Do not build or use unapproved transfer mechanisms.
+- Preparing this package does not constitute export approval.
 
-## 3. Required Discovery Before Coding
+## 3. Required Package
 
-Inspect the RD environment and record findings in `docs/RD_DISCOVERY.md`:
-
-1. Locate existing implementations and usage of:
-   - `nvt_get_pins`
-   - `nvt_get_cells`
-   - other `nvt_*` constraint wrappers
-2. Find representative Block SDC entrypoints and sourced helper Tcl files.
-3. Inventory actual call shapes, including options, wildcards, filters, collections, loops, and procedures.
-4. Identify PrimeTime release and Tcl environment.
-5. Identify how BLK, Partition, and TOP execution context is currently selected.
-6. Identify available sources of MBFF mapping:
-   - naming convention
-   - mapping file
-   - PrimeTime attributes
-   - synthesis reports
-7. Identify vendor-library pin-role information and relevant PrimeTime/lib attributes.
-8. List all assumptions and unknowns. Do not silently guess behavior.
-
-`RD_DISCOVERY.md` is internal-only unless it has been independently sanitized and approved.
-
-## 4. Architecture
-
-Use runtime wrappers; do not create a compiler that regenerates a separate plain SDC as the primary flow.
+Prepare the following structure:
 
 ```text
-Block Tcl/SDC
-    -> NSW command adapter
-    -> execution context
-    -> object/clock resolver
-    -> command-specific policy
-    -> native PrimeTime command
+NSW_REVIEW_HANDOFF/
+├─ HANDOFF_MANIFEST.md
+├─ FILE_INVENTORY.tsv
+├─ LOAD_AND_RUNTIME.md
+├─ ARCHITECTURE.md
+├─ API_AND_BEHAVIOR.md
+├─ MAPPING_MODEL.md
+├─ ASSUMPTIONS.md
+├─ KNOWN_ISSUES.md
+├─ OPEN_DECISIONS.md
+├─ SECURITY_REVIEW.md
+├─ src/
+│  └─ all NSW Tcl source files
+├─ examples/
+│  └─ synthetic Tcl/SDC examples
+├─ tests/
+│  ├─ mock/
+│  └─ primetime/
+└─ evidence/
+   ├─ TEST_SUMMARY.md
+   └─ sanitized test outputs
 ```
 
-Implement these modules:
+Do not omit helper, bootstrap, configuration, compatibility, logging, or test scripts. A wrapper file without the scripts it sources is not a complete handoff.
 
-### 4.1 Execution Context
+## 4. Source Inventory
 
-Store at least:
-
-- execution level: `BLK`, `PARTITION`, or `TOP`
-- current Block/Partition instance
-- hierarchy stage
-- scenario/mode when relevant
-- trace level
-- strictness policy
-
-Do not require every Block SDC command to contain `$whole_chp`-style conditionals.
-
-### 4.2 Object Resolver
-
-Provide one shared resolver used by all query and constraint wrappers.
-
-Supported object classes for v0.1:
-
-- cell
-- pin
-- clock
-
-Resolver results must classify each mapping as:
+Create `FILE_INVENTORY.tsv` with one row per file:
 
 ```text
-EXACT
-EXPANDED
-COLLAPSED
-SUBSTITUTED
-MISSING
-AMBIGUOUS
-NON_PORTABLE
+relative_path    purpose    sourced_by    dependencies    internal_or_exportable
 ```
 
-Preserve PrimeTime collections. Do not treat opaque collections as ordinary Tcl strings unless a documented PrimeTime API explicitly converts them.
+Also record:
 
-### 4.3 Clock Lineage Registry
+- current Git commit or internal revision;
+- file SHA-256 values;
+- generated files versus maintained source files;
+- deprecated files still used by existing flows;
+- required load order;
+- files intentionally excluded from the handoff and why.
 
-Represent relationships independently from output clock names:
+## 5. Load and Runtime Information
+
+Document the following in `LOAD_AND_RUNTIME.md`.
+
+### 5.1 Environment
+
+- PrimeTime release actually tested.
+- Operating system and shell used to launch PrimeTime.
+- Tcl/PrimeTime startup scripts relevant to NSW.
+- Required application variables.
+- Required packages or internal Tcl libraries.
+- Whether NSW also runs in Design Compiler or only PrimeTime.
+
+### 5.2 Entry Point
+
+Provide the exact synthetic load sequence, for example:
+
+```tcl
+source ./src/nsw.tcl
+nsw::configure ...
+source ./examples/synthetic/block_constraint.tcl
+```
+
+Document:
+
+- main NSW entrypoint;
+- source order;
+- initialization command;
+- required environment/global variables;
+- BLK, Partition, and TOP context selection;
+- scenario/mode initialization;
+- current design/current instance requirements;
+- behavior when NSW is sourced more than once.
+
+### 5.3 Native Command Dispatch
+
+Explain exactly how wrappers reach original PrimeTime commands:
+
+- command renaming;
+- namespace alias;
+- dispatch table;
+- recursion prevention;
+- command restoration/unload behavior.
+
+## 6. Architecture Description
+
+In `ARCHITECTURE.md`, describe the code that exists today, not the architecture that would be ideal.
+
+Include:
+
+- module boundaries;
+- shared global state or namespaces;
+- execution context storage;
+- option parsing;
+- object resolution;
+- clock mapping/lineage;
+- MBFF mapping;
+- library-vendor mapping;
+- hierarchy mapping;
+- native dispatch;
+- error handling;
+- tracing/logging;
+- configuration loading;
+- test hooks or mocks.
+
+Provide a short call flow for each wrapper family:
 
 ```text
-local clock -> parent/master clock(s) -> generated clock(s) -> root clock(s)
+nvt_command -> parser -> resolver -> policy -> native PrimeTime command
 ```
 
-- Naming prefixes are labels, not identity.
-- Support one local clock mapping to multiple Top clocks.
-- Support composed hierarchy mapping: `BLK -> Partition -> TOP`.
-- Do not require a repeated `-top_list` on every command. A per-command override may be supported, but the normal source is the shared registry.
+If the actual flow differs, document the actual flow.
 
-### 4.4 Command Adapters
+## 7. Public API and Behavior Contract
 
-Each adapter must:
+Create `API_AND_BEHAVIOR.md`.
 
-1. Parse only its own NSW metadata and documented native options.
-2. Preserve native argument values and order where semantically relevant.
-3. Delegate object resolution to the shared resolver.
-4. Apply command-specific expansion rules.
-5. Call the original PrimeTime command.
-6. Produce a structured trace record.
+### 7.1 Command Inventory
 
-Do not apply a generic Cartesian product to `-from`, `-through`, and `-to` collections.
+List every implemented public command:
 
-### 4.5 Native Dispatch
+| NSW command | Native command | Status | Used by real flow | Test coverage |
+|---|---|---|---|---|
+| `nvt_get_pins` | `get_pins` | implemented | yes/no | test IDs |
 
-- Preserve access to the original PrimeTime commands without recursive wrapper calls.
-- Keep dispatch logic centralized.
-- Validate command availability at startup.
-- Re-sourcing NSW must be idempotent or fail with a clear error.
-
-## 5. v0.1 Command Scope
-
-Implement only the following initial vertical slice:
+Use explicit status values:
 
 ```text
-nvt_get_cells
-nvt_get_pins
-nvt_get_clocks
-nvt_create_clock
-nvt_create_generated_clock
-nvt_set_false_path
-nvt_set_case_analysis
+IMPLEMENTED
+PARTIAL
+EXPERIMENTAL
+DEPRECATED
+STUB
 ```
 
-If an established internal API already exists, preserve compatibility where practical and document deviations in `docs/COMPATIBILITY.md`.
+### 7.2 Exact Calling Interface
 
-Do not implement additional wrappers unless they are required by the selected v0.1 testcases. Record other commands in `docs/UNSUPPORTED.md`.
+For every command, provide:
 
-## 6. MBFF Requirements
+- exact syntax;
+- NSW-specific options;
+- supported native options;
+- positional arguments;
+- accepted input types: string, Tcl list, PrimeTime collection, object;
+- return type;
+- error behavior;
+- BLK behavior;
+- Partition behavior;
+- TOP behavior;
+- backward-compatibility requirements.
 
-MBFF resolution must be bit-aware. A separator-only implementation is insufficient.
+### 7.3 Command Behavior Table
 
-The internal model must support relationships equivalent to:
+For every implemented wrapper, fill in:
+
+| Condition | Expected action | Current implementation | Notes |
+|---|---|---|---|
+| BLK context | pass/map/etc. | current behavior | |
+| TOP context | pass/map/etc. | current behavior | |
+| empty collection | warning/error/skip | current behavior | |
+| missing mapping | warning/error/fallback | current behavior | |
+| ambiguous mapping | warning/error/expand | current behavior | |
+| one-to-many | expand/union/reject | current behavior | |
+| many-to-one | collapse/deduplicate/reject | current behavior | |
+| duplicate result | retain/deduplicate | current behavior | |
+
+Do not write only what the current code happens to do. Distinguish intended behavior from current behavior.
+
+## 8. Mapping Model
+
+Create `MAPPING_MODEL.md` describing all mapping inputs and their precedence.
+
+### 8.1 Hierarchy Mapping
+
+Document:
+
+- BLK to Partition mapping;
+- Partition to TOP mapping;
+- whether mappings compose across multiple levels;
+- port versus instance-pin handling;
+- flatten, uniquify, rename, and replicated-object handling;
+- expected behavior when hierarchy mapping is incomplete.
+
+### 8.2 Clock Mapping
+
+Document:
+
+- local clock to TOP clock mapping;
+- one-to-many master clocks;
+- generated-clock source/master mapping;
+- root clock tracking;
+- clock naming rules;
+- duplicate-name handling;
+- mapping source: manual list, automatic discovery, or both;
+- precedence between automatic and manual data.
+
+### 8.3 MBFF Mapping
+
+Document:
+
+- mapping source;
+- MB separator rules;
+- logical register to physical MBFF mapping;
+- D/Q bit mapping;
+- bit reorder behavior;
+- shared clock/reset/set handling;
+- replicated registers;
+- duplicate collection handling;
+- missing/ambiguous mapping policy.
+
+Provide a synthetic example equivalent to:
 
 ```text
 logical register   physical cell   logical pin   physical pin
@@ -157,21 +251,9 @@ REG_A[1]           MBFF_001        Q             Q1
 REG_A[*]           MBFF_001        CK            CP
 ```
 
-Handle and test:
+### 8.4 Cross-Library Mapping
 
-- bit reordering
-- shared clock/reset/set pins
-- one-to-many replication
-- many-to-one collapse
-- duplicate-object removal
-- missing bit mapping
-- ambiguous mapping
-
-Do not infer bit ordering from names when authoritative mapping data exists.
-
-## 7. Cross-Library Requirements
-
-Use semantic pin roles as the primary model:
+Document semantic roles and actual matching logic:
 
 ```text
 clock
@@ -186,198 +268,175 @@ gate_enable
 test_enable
 ```
 
-Vendor synonym tables such as `CK <-> CP` may be used as fallback configuration, not as the only source of truth.
+State whether mapping uses:
 
-Where possible, validate:
+- static synonym tables;
+- `ref_name` or `lib_cell`;
+- lib-pin attributes;
+- timing arcs/functions;
+- naming heuristics;
+- fallback search.
 
-- positive-edge versus negative-edge behavior
-- set/reset polarity
-- flip-flop versus latch
-- functional versus scan/test pins
-- integrated clock-gating pin roles
+Document validation of polarity, edge type, latch/DFF classification, and functional versus test pins.
 
-Keep real vendor mappings in an internal configuration layer, separate from exportable core code.
+## 9. Synthetic Usage Examples
 
-## 8. Error and Trace Model
+Provide synthetic examples that preserve the shapes of real calls without company identifiers.
 
-Every nontrivial operation must emit a structured internal trace containing:
+At minimum include:
+
+1. Dynamic Tcl using `if`, `foreach`, `proc`, and variables.
+2. `nvt_get_cells` and `nvt_get_pins` with wildcard/filter options.
+3. Single-bit register mapped to MBFF D/Q pins.
+4. Shared MBFF clock-pin collapse.
+5. Cross-library `CK`/`CP`-style substitution.
+6. BLK clock mapped to multiple TOP clocks.
+7. Generated clock mapped through multiple hierarchy stages.
+8. `set_false_path` using `-from`, ordered `-through`, and `-to`.
+9. Missing and ambiguous object cases.
+10. Empty collection behavior.
+
+For each example provide:
 
 ```text
-NSW version
-test/call ID
-source file and line when available
-wrapper command
-execution context
-original selector or collection summary
-mapping status
-input count
-resolved count
-native command count
-policy decision
-error/warning code
+Test ID
+Execution context
+Input command
+Input object count
+Expected resolved objects using synthetic names
+Expected mapping status
+Expected native command count
+Expected warning/error code
 ```
 
-Use stable error codes, for example:
+Code review cannot reliably infer omitted SDC usage from wrapper code. These examples are mandatory.
+
+## 10. Tests and Evidence
+
+### 10.1 Test Inventory
+
+Create `evidence/TEST_SUMMARY.md`:
+
+| Test ID | Command | Context | Purpose | Result | PrimeTime version |
+|---|---|---|---|---|---|
+
+### 10.2 Required Evidence
+
+Provide sanitized evidence for:
+
+- exact object resolution;
+- one-to-many expansion;
+- many-to-one collapse;
+- duplicate removal;
+- missing mapping;
+- ambiguous mapping;
+- MBFF bit reorder;
+- cross-library substitution;
+- generated-clock master/source mapping;
+- re-sourcing NSW;
+- native command dispatch without recursion.
+
+### 10.3 Reproduction Commands
+
+Provide exact commands for:
 
 ```text
-NSW-CTX-xxx
-NSW-PARSE-xxx
-NSW-RESOLVE-xxx
-NSW-CLOCK-xxx
-NSW-DISPATCH-xxx
-NSW-UNSUPPORTED-xxx
+mock test execution
+PrimeTime integration test execution
+test result collection
 ```
 
-Provide separate outputs:
+Tests must report pass/fail automatically. Do not require an external reviewer to interpret a large raw log.
 
-- full internal trace, which may contain company data and stays in RD
-- sanitized summary, which contains counts, statuses, and synthetic/stable identifiers only
+## 11. Assumptions, Known Issues, and Open Decisions
 
-Unknown, ambiguous, or semantically unsafe behavior must not silently pass.
+### `ASSUMPTIONS.md`
 
-## 9. Required Tests
+List every assumption about:
 
-### 9.1 Pure Tcl / Mock Tests
+- Block SDC style;
+- object naming;
+- PrimeTime collections;
+- hierarchy;
+- clock ownership;
+- MBFF naming/mapping;
+- vendor libraries;
+- command ordering;
+- re-source behavior;
+- missing-object policy.
 
-Create tests that do not require company data or a PrimeTime license for:
+### `KNOWN_ISSUES.md`
 
-- argument parsing
-- context selection
-- mapping composition
-- MBFF exact/expanded/collapsed cases
-- vendor semantic-role substitution
-- duplicate removal
-- missing and ambiguous policies
-- trace and error-code generation
-- wrapper re-source behavior
-
-### 9.2 PrimeTime Integration Tests
-
-Create `tests/primetime/run_all.tcl` that runs inside RD PrimeTime and tests:
-
-1. Native BLK pass-through.
-2. BLK-to-TOP one-to-many clock mapping.
-3. Generated-clock master/source expansion.
-4. MBFF bit-specific D/Q mapping.
-5. Shared MBFF clock-pin collapse.
-6. Cross-library clock-pin substitution.
-7. `set_false_path` endpoint mapping without unsafe Cartesian expansion.
-8. `set_case_analysis` pass, skip, conflict, and missing-object behavior.
-9. Empty collection behavior.
-10. Re-sourcing NSW.
-
-Each test must have an explicit expected result and must return pass/fail without requiring manual log interpretation.
-
-## 10. Synthetic Exportable Examples
-
-Create synthetic examples that reproduce the structure of real use cases without company identifiers:
+For each issue provide:
 
 ```text
-examples/synthetic/
-├─ dynamic_block_constraint.tcl
-├─ mbff_mapping.csv
-├─ vendor_pin_mapping.csv
-├─ hierarchy_mapping.csv
-└─ expected_behavior.md
+Issue ID
+Affected command
+Trigger condition
+Observed behavior
+Expected behavior
+Current workaround
+Test coverage
+Severity
 ```
 
-Sanitization requirements:
+### `OPEN_DECISIONS.md`
 
-- Use consistent pseudonyms.
-- Preserve hierarchy depth and relationships.
-- Preserve bus indices, escaping, wildcards, regexp, and separators.
-- Preserve collection cardinality.
-- Preserve Tcl control flow and option order.
-- Do not include comments or paths that reveal projects, users, vendors, or products.
+Record unresolved design choices. Do not hide uncertainty in implementation comments.
 
-## 11. Repository Layout
+## 12. Review Questions to Answer
 
-Recommended layout:
+Answer these explicitly in `HANDOFF_MANIFEST.md`:
 
-```text
-nsw/
-├─ README.md
-├─ DESIGN.md
-├─ ASSUMPTIONS.md
-├─ CHANGELOG.md
-├─ src/
-│  ├─ nsw.tcl
-│  ├─ core/
-│  ├─ resolver/
-│  ├─ clock/
-│  └─ adapters/
-├─ config/
-│  └─ schema/
-├─ tests/
-│  ├─ mock/
-│  └─ primetime/
-├─ examples/
-│  └─ synthetic/
-├─ docs/
-│  ├─ RD_DISCOVERY.md
-│  ├─ COMPATIBILITY.md
-│  └─ UNSUPPORTED.md
-└─ tools/
-   ├─ run_mock_tests.tcl
-   └─ make_export_review_package.tcl
-```
+1. What problem does the current NSW version solve successfully?
+2. Which real Block flows currently use it?
+3. Which public APIs must remain backward compatible?
+4. Which wrappers are incomplete or known to be unsafe?
+5. Which behavior depends on company-private configuration?
+6. Which behavior is hard-coded?
+7. Which mappings are authoritative and which are heuristics?
+8. Where can a mapping silently select the wrong object?
+9. Which commands can produce combinatorial expansion?
+10. Which failures are currently warnings but should possibly be errors?
+11. What has been tested in real PrimeTime?
+12. What has only been tested with mocks?
+13. What should the external reviewer fix first?
 
-Do not place internal vendor mappings, real constraints, or real logs in the exportable repository tree.
+## 13. Export Review
 
-## 12. Deliverables
+Create `SECURITY_REVIEW.md` and scan the proposed handoff package for:
 
-Produce:
+- company and project names;
+- internal hostnames, paths, usernames, and email addresses;
+- real hierarchy, cell, pin, clock, and net names;
+- real library names or vendor data not approved for release;
+- real SDC fragments;
+- proprietary documentation;
+- raw PrimeTime logs;
+- comments containing internal details;
+- Git history containing deleted sensitive data.
 
-1. Working NSW v0.1 source.
-2. Pure Tcl/mock test suite.
-3. PrimeTime integration test suite and result summary.
-4. Synthetic examples.
-5. Architecture and compatibility documentation.
-6. Explicit assumptions and unsupported-case list.
-7. Internal full test report.
-8. Separate export-review package containing only generic code and synthetic data.
+The exportable package should be generated from an allowlist of files. Do not copy the full internal repository and then rely only on deletion.
 
-Before preparing the export-review package, scan it for:
+## 14. Final Handoff Report
 
-- company/project names
-- internal hostnames and paths
-- usernames and email addresses
-- library/vendor names that are not approved for release
-- real cell, instance, pin, clock, and hierarchy names
-- copied proprietary documentation
-- real constraint fragments
-
-## 13. Acceptance Criteria
-
-v0.1 is complete only when:
-
-- The same synthetic dynamic Block constraint runs in BLK and TOP contexts.
-- Native PrimeTime commands remain reachable and are not recursively wrapped.
-- PrimeTime collections are preserved correctly.
-- MBFF bit mapping and shared-pin collapse pass integration tests.
-- Cross-library semantic pin substitution passes integration tests.
-- One-to-many clock/generated-clock handling passes integration tests.
-- Missing and ambiguous mappings produce deterministic policies and stable codes.
-- All supported wrappers have mock and PrimeTime tests.
-- Unsupported behavior is explicit rather than silently guessed.
-- Export-review package contains no company-confidential data.
-
-## 14. Final Report Format
-
-At completion, provide:
+At completion, report:
 
 ```text
-Implementation status:
+NSW internal revision:
 PrimeTime version tested:
-Supported commands:
-Mock tests: passed/total
-PrimeTime tests: passed/total
-Known failures:
-Assumptions requiring human confirmation:
-Unsupported cases:
-Compatibility deviations:
+Number of Tcl source files:
+Implemented public commands:
+Partial/stub commands:
+Mock tests passed/total:
+PrimeTime tests passed/total:
+Known critical issues:
+Backward-compatibility requirements:
+Company-private dependencies:
+Open decisions:
 Export-review package path:
-Export scan result:
+Security scan result:
+Files excluded from export and reasons:
 ```
 
-If any requirement is unclear, inspect the actual RD usage first. Record unresolved points in `ASSUMPTIONS.md`; do not invent behavior.
+Do not modify the NSW implementation merely to make this handoff look complete. Document the current state accurately. If information is unknown, write `UNKNOWN` and explain how it can be determined.
