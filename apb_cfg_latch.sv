@@ -6,6 +6,7 @@ module apb_cfg_latch (
     input  logic        PWRITE,
     input  logic [31:0] PADDR,
     input  logic [31:0] PWDATA,
+    output logic        pready,
     input  logic        scan_test_en,
     output logic [31:0] cfg_q
 );
