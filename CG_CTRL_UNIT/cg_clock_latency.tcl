@@ -1,10 +1,10 @@
 # Clock latency analysis for an already loaded PrimeTime current_design.
-# v2.0: start at sub-block clock inputs (TOP=level 1, first analyzed level=2).
+# v2.1: detect sub-block clock inputs from connected leaf driver/load pins.
 # Only two files: hierarchy.rpt and estimated_latency.rpt.
 # source cg_clock_latency.tcl
 # ::cg_latency::run -max_level 3 -out_dir ./cg_latency_results
 namespace eval ::cg_latency {
-    variable version 2.0
+    variable version 2.1
     variable windows_cache {}
     variable cell_cache {}
 }
@@ -331,16 +331,31 @@ proc ::cg_latency::window {obj name mode} {
     }
     return [dict get $windows_cache $name]
 }
+proc ::cg_latency::interface_clocks {hier_pin} {
+    # clocks is read on connected leaf pins, never on the hierarchical pin.
+    set nets [get_nets -quiet -of_objects $hier_pin]
+    if {[sizeof_collection $nets] == 0} {return {}}
+    foreach direction_filter {{direction == out || direction == inout} {direction == in || direction == inout}} {
+        set pins [get_pins -quiet -leaf -of_objects $nets -filter $direction_filter]
+        set found {}
+        foreach_in_collection pin $pins {
+            set clocks [attr $pin clocks]
+            if {$clocks ne {} && [sizeof_collection $clocks] > 0} {set found $clocks; break}
+        }
+        if {$found ne {}} {return $found}
+    }
+    return {}
+}
 proc ::cg_latency::collect {blocks sinks mode scale} {
     set rows {}
     foreach block $blocks {
         set path [dict get $block path]
         set inputs {}
-        # Only the current block's interface input/inout pins with clocks assigned.
+        # Check the interface net's leaf driver/load for clock attributes.
         # No TOP ports, name guessing, internal-pin enumeration, or non-clock output.
         foreach_in_collection pin [get_pins -quiet -of_objects [dict get $block obj] \
                 -filter {direction == in || direction == inout}] {
-            set clocks [attr $pin clocks]
+            set clocks [interface_clocks $pin]
             if {$clocks eq {} || [sizeof_collection $clocks] == 0} {continue}
             dict set inputs [get_object_name $pin] [list $pin $clocks]
         }
@@ -424,7 +439,7 @@ proc ::cg_latency::write_reports {design blocks rows options} {
     set ch [open $hierarchy w]
     set code [catch {
         fconfigure $ch -encoding utf-8 -translation lf
-        puts $ch "Clock latency analysis v2.0; units: ns; [dict get $options -delay_type]"
+        puts $ch "Clock latency analysis v2.1; units: ns; [dict get $options -delay_type]"
         puts $ch "TOP=level 1; analyze sub-block levels 2..[dict get $options -max_level] (0=all)."
         puts $ch "Mean/median exclude latency outliers; DFF/latch counts include all reachable cells."
         puts $ch {}
@@ -445,7 +460,7 @@ proc ::cg_latency::write_reports {design blocks rows options} {
                 puts $ch $line
             }
         }
-        if {![llength $rows]} {puts $ch {  No sub-block interface inputs with a clocks attribute were found.}}
+        if {![llength $rows]} {puts $ch {  No sub-block clock inputs were found on connected leaf driver/load pins.}}
     } result error_options]
     close $ch
     if {$code} {return -options $error_options $result}
@@ -487,7 +502,7 @@ proc ::cg_latency::run {args} {
     variable windows_cache
     variable cell_cache
     set options [eval [linsert $args 0 ::cg_latency::options]]
-    foreach command {current_design current_instance get_attribute get_cells get_pins \
+    foreach command {current_design current_instance get_attribute get_cells get_pins get_nets \
         all_clocks all_registers all_fanout get_object_name sizeof_collection \
         foreach_in_collection get_app_var set_app_var update_timing} {
         if {![llength [info commands ::$command]]} {error "PrimeTime command unavailable: $command; run inside pt_shell."}
@@ -503,7 +518,7 @@ proc ::cg_latency::run {args} {
     set windows_cache {}; set cell_cache {}
     set code [catch {
         current_instance
-        message "v2.0: sub-blocks only; preparing timing"
+        message "v2.1: sub-blocks only; preparing timing"
         set_app_var timing_save_pin_arrival_and_slack true
         update_timing
         set scale [time_scale $design $options]

@@ -1,4 +1,4 @@
-# Clock latency analysis — v2.0
+# Clock latency analysis — v2.1
 
 在已載入設計的 PrimeTime session 執行：
 
@@ -18,7 +18,8 @@ source /your/path/cg_clock_latency.tcl
 
 - TOP 為第 1 層，只作報告標題；**從 TOP 下的 sub-block（第 2 層）開始分析**。
 - `-max_level 3` 分析第 2、3 層；`0` 分析所有 sub-block 層級。
-- 起點只使用各 block 介面上 **`clocks` attribute 非空的 input／inout pin**。
+- 對各 block 的介面 input／inout pin，找到連接 net 的 **leaf driver／load pin**，以它們的 `clocks` attribute 判斷是否為 clock 入口；不查 hier pin 的 `clocks`。
+- 優先檢查 leaf driver；沒有 clock attribute 時，再檢查 leaf load。確認後仍從該 module 入口追蹤。
 - 不從 TOP port 開始、不依名稱猜 clock、不列 non-clock pin。
 - 每個入口統計該 block 內全部後代 DFF／latch；macro 不計。掃描深度不截斷後代負載。
 - 同一入口內，同一 sequential cell 只計一次；父子 block 或不同入口可以重複納入。
@@ -50,6 +51,6 @@ TOP
 
 - Console 只顯示準備階段及各 clock input 的開始／完成；不產生 CSV、逐 pin 明細或模型匯出檔。
 - 開始時仍需準備內部 pin arrival 並更新 timing，這一步作用於目前 design。之後才逐一從 sub-block clock input 追蹤。
-- 若 arrival 無法配對，保留負載數、標示 missing，該筆不參與公式；ideal clock 也不參與公式。
+- 若 module 入口 arrival 不可用或無法配對，保留負載數、標示 missing，該筆不參與公式；不拿 leaf driver／load arrival 冒充入口 arrival。Ideal clock 也不參與公式。
 - 同 clock 多入口匯合時，arrival 差值是 envelope 的差，不保證等於指定入口的獨立 path delay。
 - 已以 Tcl runtime／模擬 collections 驗證；本機無 `pt_shell`，尚未以真實 IC database 驗證。
